@@ -26,7 +26,50 @@ jobs:
           go install github.com/goreleaser/goreleaser/v2@v2.12.7
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Compute release metadata
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
+
+      - name: Generate release notes
+        run: |
+          args=(--version "$TAG" --target "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--previous "$PREVIOUS_TAG")
+          fi
+          go run ./scripts/changelog "${args[@]}"
+
+      - name: Update CHANGELOG.md on main
+        run: |
+          git fetch origin main
+          git worktree add -B main "$RUNNER_TEMP/main-branch" origin/main
+          cd "$RUNNER_TEMP/main-branch"
+
+          args=(--version "$TAG" --target "$TAG" --changelog-file CHANGELOG.md)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--previous "$PREVIOUS_TAG")
+          fi
+          go run ./scripts/changelog "${args[@]}"
+
+          if git diff --quiet -- CHANGELOG.md; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for $TAG"
+          git push origin HEAD:main
+
       - name: Run GoReleaser
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update GitHub release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
