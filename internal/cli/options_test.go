@@ -2,7 +2,10 @@ package cli
 
 import (
 	"io"
+	"strings"
 	"testing"
+
+	"github.com/AHaldner/mailcheck/internal/help"
 )
 
 func TestBuildSelectorsDeduplicatesExplicitSelectors(t *testing.T) {
@@ -64,5 +67,66 @@ func TestParseArgsSupportsVersionWithoutDomain(t *testing.T) {
 
 	if !got.Version {
 		t.Fatal("Version = false, want true")
+	}
+}
+
+func TestParseArgsSupportsShortVersionWithoutDomain(t *testing.T) {
+	got, err := ParseArgs([]string{"-v"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.Version {
+		t.Fatal("Version = false, want true")
+	}
+}
+
+func TestParseArgsSupportsHelpWithoutDomain(t *testing.T) {
+	got, err := ParseArgs([]string{"--help"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.Help {
+		t.Fatal("Help = false, want true")
+	}
+}
+
+func TestParseArgsRejectsHelpWithDomain(t *testing.T) {
+	_, err := ParseArgs([]string{"--help", "example.com"}, io.Discard)
+	if err == nil {
+		t.Fatal("ParseArgs() error = nil, want error")
+	}
+
+	if err.Error() != "--help does not accept a domain argument" {
+		t.Fatalf("ParseArgs() error = %q, want %q", err.Error(), "--help does not accept a domain argument")
+	}
+}
+
+func TestParseArgsSupportsShortHelpWithoutDomain(t *testing.T) {
+	got, err := ParseArgs([]string{"-h"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.Help {
+		t.Fatal("Help = false, want true")
+	}
+}
+
+func TestParseArgsRejectsHelpWithDomainPrintsConsistentUsage(t *testing.T) {
+	var stderr strings.Builder
+
+	_, err := ParseArgs([]string{"--help", "example.com"}, &stderr)
+	if err == nil {
+		t.Fatal("ParseArgs() error = nil, want error")
+	}
+
+	if err.Error() != "--help does not accept a domain argument" {
+		t.Fatalf("ParseArgs() error = %q, want %q", err.Error(), "--help does not accept a domain argument")
+	}
+
+	if strings.TrimSpace(stderr.String()) != help.GetHelp() {
+		t.Fatalf("stderr = %q, want %q", strings.TrimSpace(stderr.String()), help.GetHelp())
 	}
 }

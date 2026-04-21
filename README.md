@@ -38,6 +38,9 @@ See [CHANGELOG.md](/Users/andrinhaldner/Documents/Dev/OpenSource/mailcheck/CHANG
 
 ```bash
 mailcheck example.com
+mailcheck -h
+mailcheck --help
+mailcheck -v
 mailcheck --version
 ```
 
@@ -61,7 +64,8 @@ go test ./...
 | `--json` | Output JSON |
 | `--no-color` | Disable ANSI colors |
 | `--no-progress` | Disable the live progress line in interactive text mode |
-| `--version` | Print the current version and exit |
+| `--help`, `-h` | Print the help message and exit |
+| `--version`, `-v` | Print the current version and exit |
 | `--timeout <duration>` | Set the total DNS lookup timeout |
 
 ## Notes

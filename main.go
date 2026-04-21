@@ -9,6 +9,7 @@ import (
 	"github.com/AHaldner/mailcheck/internal/checks"
 	"github.com/AHaldner/mailcheck/internal/cli"
 	"github.com/AHaldner/mailcheck/internal/dns"
+	"github.com/AHaldner/mailcheck/internal/help"
 	"github.com/AHaldner/mailcheck/internal/model"
 	"github.com/AHaldner/mailcheck/internal/report"
 	"github.com/AHaldner/mailcheck/internal/ui"
@@ -29,6 +30,14 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if opts.Version {
 		if _, err := fmt.Fprintln(stdout, appversion.Current()); err != nil {
 			fmt.Fprintf(stderr, "error: failed to write version: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if opts.Help {
+		if _, err := fmt.Fprintln(stdout, help.GetHelp()); err != nil {
+			fmt.Fprintf(stderr, "error: failed to write help: %v\n", err)
 			return 1
 		}
 		return 0
@@ -74,6 +83,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	} else {
 		output, err = report.RenderText(runResult, opts.NoColor)
 	}
+
 	if err != nil {
 		fmt.Fprintf(stderr, "error: failed to render report: %v\n", err)
 		return 1

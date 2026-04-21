@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/AHaldner/mailcheck/internal/help"
 )
 
 type Options struct {
@@ -16,6 +18,7 @@ type Options struct {
 	NoColor    bool
 	NoProgress bool
 	Version    bool
+	Help       bool
 	Timeout    time.Duration
 }
 
@@ -45,24 +48,25 @@ func ParseArgs(args []string, stderr io.Writer) (Options, error) {
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI color in text output")
 	fs.BoolVar(&opts.NoProgress, "no-progress", false, "disable interactive progress output")
 	fs.BoolVar(&opts.Version, "version", false, "print version and exit")
+	fs.BoolVar(&opts.Version, "v", false, "print version and exit")
+	fs.BoolVar(&opts.Help, "help", false, "print help message and exit")
+	fs.BoolVar(&opts.Help, "h", false, "print help message and exit")
 	fs.DurationVar(&opts.Timeout, "timeout", 3*time.Second, "total DNS lookup timeout")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: mailcheck [--version] | [--selector name] [--json] [--no-color] [--no-progress] [--timeout 3s] domain.example")
-		fs.PrintDefaults()
+		fmt.Fprintln(stderr, help.GetHelp())
+		fmt.Fprintln(stderr)
 	}
 
 	if err := fs.Parse(normalized); err != nil {
 		return Options{}, err
 	}
 
-	if opts.Version {
-		if fs.NArg() != 0 {
-			fs.Usage()
-			return Options{}, errors.New("--version does not accept a domain argument")
-		}
+	if earlyOpts, done, err := finalizeFlagOnlyCommand("version", opts.Version, fs, selectors, opts); done {
+		return earlyOpts, err
+	}
 
-		opts.Selectors = BuildSelectors(selectors)
-		return opts, nil
+	if earlyOpts, done, err := finalizeFlagOnlyCommand("help", opts.Help, fs, selectors, opts); done {
+		return earlyOpts, err
 	}
 
 	if fs.NArg() != 1 {
@@ -73,6 +77,20 @@ func ParseArgs(args []string, stderr io.Writer) (Options, error) {
 	opts.Domain = fs.Arg(0)
 	opts.Selectors = BuildSelectors(selectors)
 	return opts, nil
+}
+
+func finalizeFlagOnlyCommand(flagName string, enabled bool, fs *flag.FlagSet, selectors selectorFlags, opts Options) (Options, bool, error) {
+	if !enabled {
+		return opts, false, nil
+	}
+
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return Options{}, true, fmt.Errorf("--%s does not accept a domain argument", flagName)
+	}
+
+	opts.Selectors = BuildSelectors(selectors)
+	return opts, true, nil
 }
 
 func normalizeArgs(args []string) ([]string, error) {
@@ -96,6 +114,7 @@ func normalizeArgs(args []string) ([]string, error) {
 			arg == "--json",
 			arg == "--no-color",
 			arg == "--no-progress",
+			arg == "--help",
 			arg == "--version":
 			normalized = append(normalized, arg)
 		case strings.HasPrefix(arg, "-"):
@@ -127,9 +146,11 @@ func BuildSelectors(explicit []string) []string {
 		if selector == "" {
 			return
 		}
+
 		if _, ok := seen[selector]; ok {
 			return
 		}
+
 		seen[selector] = struct{}{}
 		selectors = append(selectors, selector)
 	}
