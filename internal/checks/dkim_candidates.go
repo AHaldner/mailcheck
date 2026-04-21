@@ -219,7 +219,7 @@ func defaultDKIMSelectorCandidates(explicit []string) []string {
 		candidates = append(candidates, selector)
 	}
 
-	for _, selector := range strings.Fields(curatedDKIMSelectors) {
+	for selector := range strings.FieldsSeq(curatedDKIMSelectors) {
 		add(selector)
 	}
 

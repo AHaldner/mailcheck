@@ -1,4 +1,4 @@
-# mailcheck
+# ✉️ mailcheck
 
 `mailcheck` is a small Go CLI for checking a domain's mail DNS setup.
 

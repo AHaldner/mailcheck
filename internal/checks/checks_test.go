@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -216,13 +217,7 @@ func TestCheckDKIMIgnoresInvalidRecords(t *testing.T) {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(values, want)
 }
 
 func containsSubstring(values []string, want string) bool {
