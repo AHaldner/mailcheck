@@ -1,4 +1,4 @@
-# mailcheck
+# ✉️ mailcheck
 
 `mailcheck` is a small Go CLI for checking a domain's mail DNS setup.
 
@@ -18,13 +18,19 @@ From GitHub:
 go install github.com/AHaldner/mailcheck@latest
 ```
 
-From a GitHub release:
+From a GitHub release on macOS or Linux:
 
 ```bash
 BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/AHaldner/mailcheck/main/scripts/install.sh | sh
 ```
 
-Tagged releases are built automatically with GitHub Actions and GoReleaser. The install script verifies the downloaded archive against the release `checksums.txt` before installing.
+From a GitHub release on Windows PowerShell:
+
+```powershell
+iwr https://raw.githubusercontent.com/AHaldner/mailcheck/main/scripts/install.ps1 -useb | iex
+```
+
+Tagged releases are built automatically with GitHub Actions and GoReleaser. The installers verify the downloaded archive against the release `checksums.txt` before installing.
 
 ## Usage
 

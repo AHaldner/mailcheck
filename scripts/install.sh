@@ -35,6 +35,8 @@ case "$os" in
 darwin | linux) ;;
 *)
     echo "unsupported OS: $os" >&2
+    echo "For Windows, use the PowerShell installer:" >&2
+    echo "  iwr https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 -useb | iex" >&2
     exit 1
     ;;
 esac
