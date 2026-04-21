@@ -22,7 +22,7 @@ builds:
 
 archives:
   - id: default
-    builds:
+    ids:
       - mailcheck
     formats:
       - tar.gz
