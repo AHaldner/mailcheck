@@ -3,7 +3,7 @@ package report
 import (
 	"encoding/json"
 
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 func RenderJSON(result model.RunResult) (string, error) {

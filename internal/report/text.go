@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 func RenderText(result model.RunResult, noColor bool) (string, error) {

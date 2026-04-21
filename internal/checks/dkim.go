@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"mailcheck/internal/dns"
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/dns"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 const dkimConcurrentLookups = 24

@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"mailcheck/internal/dns"
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/dns"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResult {

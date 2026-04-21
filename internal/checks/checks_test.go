@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 type fakeResolver struct {

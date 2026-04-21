@@ -1,27 +1,41 @@
-# ✉️ mailcheck
+# mailcheck
 
 `mailcheck` is a small Go CLI for checking a domain's mail DNS setup.
 
-It inspects:
+It inspects `MX`, `SPF`, `DMARC`, and guessed `DKIM` selectors.
 
-- `MX`
-- `SPF`
-- `DMARC`
-- guessed `DKIM` selectors
+## Install
 
-The goal is fast local inspection, not full deliverability analysis.
+From source in the current repo:
+
+```bash
+go install .
+```
+
+From GitHub:
+
+```bash
+go install github.com/AHaldner/mailcheck@latest
+```
+
+From a GitHub release:
+
+```bash
+BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/AHaldner/mailcheck/main/scripts/install.sh | sh
+```
+
+Tagged releases are built automatically with GitHub Actions and GoReleaser. The install script verifies the downloaded archive against the release `checksums.txt` before installing.
 
 ## Usage
 
 ```bash
-go run . example.com
+mailcheck example.com
 ```
 
-Or build a binary:
+Build locally:
 
 ```bash
 go build -o mailcheck .
-./mailcheck example.com
 ```
 
 Run tests:

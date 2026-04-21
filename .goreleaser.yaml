@@ -1,0 +1,42 @@
+version: 2
+
+project_name: mailcheck
+
+before:
+  hooks:
+    - go test ./...
+
+builds:
+  - id: mailcheck
+    main: .
+    binary: mailcheck
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    builds:
+      - mailcheck
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: AHaldner
+    name: mailcheck

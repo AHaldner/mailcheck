@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 
-	"mailcheck/internal/checks"
-	"mailcheck/internal/cli"
-	"mailcheck/internal/dns"
-	"mailcheck/internal/model"
-	"mailcheck/internal/report"
+	"github.com/AHaldner/mailcheck/internal/checks"
+	"github.com/AHaldner/mailcheck/internal/cli"
+	"github.com/AHaldner/mailcheck/internal/dns"
+	"github.com/AHaldner/mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/report"
 )
 
 func main() {

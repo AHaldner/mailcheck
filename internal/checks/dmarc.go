@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"mailcheck/internal/dns"
-	"mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/dns"
+	"github.com/AHaldner/mailcheck/internal/model"
 )
 
 func CheckDMARC(ctx context.Context, r dns.Resolver, domain string) model.CheckResult {
