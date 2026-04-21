@@ -44,3 +44,25 @@ func TestParseArgsAllowsDomainBeforeFlags(t *testing.T) {
 		t.Fatalf("Timeout = %v, want 5s", got.Timeout)
 	}
 }
+
+func TestParseArgsSupportsNoProgress(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com", "--no-progress"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.NoProgress {
+		t.Fatal("NoProgress = false, want true")
+	}
+}
+
+func TestParseArgsSupportsVersionWithoutDomain(t *testing.T) {
+	got, err := ParseArgs([]string{"--version"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.Version {
+		t.Fatal("Version = false, want true")
+	}
+}

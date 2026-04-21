@@ -11,6 +11,8 @@ import (
 	"github.com/AHaldner/mailcheck/internal/dns"
 	"github.com/AHaldner/mailcheck/internal/model"
 	"github.com/AHaldner/mailcheck/internal/report"
+	"github.com/AHaldner/mailcheck/internal/ui"
+	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
 
 func main() {
@@ -24,6 +26,14 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 
+	if opts.Version {
+		if _, err := fmt.Fprintln(stdout, appversion.Current()); err != nil {
+			fmt.Fprintf(stderr, "error: failed to write version: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	if err := cli.ValidateDomain(opts.Domain); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -33,11 +43,19 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	defer cancel()
 
 	resolver := dns.NewNetResolver()
-	results := []model.CheckResult{
-		checks.CheckMX(ctx, resolver, opts.Domain),
-		checks.CheckSPF(ctx, resolver, opts.Domain),
-		checks.CheckDMARC(ctx, resolver, opts.Domain),
-	}
+	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor)
+
+	results := make([]model.CheckResult, 0, 4)
+	progress.Start("MX")
+	results = append(results, checks.CheckMX(ctx, resolver, opts.Domain))
+
+	progress.Start("SPF")
+	results = append(results, checks.CheckSPF(ctx, resolver, opts.Domain))
+
+	progress.Start("DMARC")
+	results = append(results, checks.CheckDMARC(ctx, resolver, opts.Domain))
+
+	progress.Start("DKIM")
 	dkimResult, selectorsTried, selectorsFound := checks.CheckDKIM(ctx, resolver, opts.Domain, opts.Selectors)
 	results = append(results, dkimResult)
 
@@ -48,6 +66,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		DKIMSelectorsFound: selectorsFound,
 	}
 	runResult.Rating = model.RatingFromChecks(runResult.Checks)
+	progress.Finish()
 
 	var output string
 	if opts.JSON {

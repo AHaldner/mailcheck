@@ -36,6 +36,7 @@ Tagged releases are built automatically with GitHub Actions and GoReleaser. The 
 
 ```bash
 mailcheck example.com
+mailcheck --version
 ```
 
 Build locally:
@@ -57,6 +58,8 @@ go test ./...
 | `--selector <name>` | Add extra DKIM selectors to try |
 | `--json` | Output JSON |
 | `--no-color` | Disable ANSI colors |
+| `--no-progress` | Disable the live progress line in interactive text mode |
+| `--version` | Print the current version and exit |
 | `--timeout <duration>` | Set the total DNS lookup timeout |
 
 ## Notes
@@ -64,6 +67,7 @@ go test ./...
 - DKIM uses a built-in selector library plus any selectors passed with `--selector`.
 - Common ESP-style subdomain setups are handled, including cases where helper records live on `send.<domain>` or DMARC is inherited from the parent domain.
 - A DKIM pass reports the selectors found.
+- In interactive text mode, a single live progress line is shown on `stderr` while checks are running.
 - The tool only checks DNS records. It does not test SMTP, TLS, inbox placement, or message signing end-to-end.
 
 ## Example

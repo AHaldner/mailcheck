@@ -12,6 +12,8 @@ builds:
     binary: mailcheck
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/AHaldner/mailcheck/internal/version.Value={{ .Version }}
     goos:
       - darwin
       - linux

@@ -10,11 +10,13 @@ import (
 )
 
 type Options struct {
-	Domain    string
-	Selectors []string
-	JSON      bool
-	NoColor   bool
-	Timeout   time.Duration
+	Domain     string
+	Selectors  []string
+	JSON       bool
+	NoColor    bool
+	NoProgress bool
+	Version    bool
+	Timeout    time.Duration
 }
 
 type selectorFlags []string
@@ -41,14 +43,26 @@ func ParseArgs(args []string, stderr io.Writer) (Options, error) {
 	fs.Var(&selectors, "selector", "additional DKIM selector to try")
 	fs.BoolVar(&opts.JSON, "json", false, "render machine-readable JSON")
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI color in text output")
+	fs.BoolVar(&opts.NoProgress, "no-progress", false, "disable interactive progress output")
+	fs.BoolVar(&opts.Version, "version", false, "print version and exit")
 	fs.DurationVar(&opts.Timeout, "timeout", 3*time.Second, "total DNS lookup timeout")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: mailcheck [--selector name] [--json] [--no-color] [--timeout 3s] domain.example")
+		fmt.Fprintln(stderr, "Usage: mailcheck [--version] | [--selector name] [--json] [--no-color] [--no-progress] [--timeout 3s] domain.example")
 		fs.PrintDefaults()
 	}
 
 	if err := fs.Parse(normalized); err != nil {
 		return Options{}, err
+	}
+
+	if opts.Version {
+		if fs.NArg() != 0 {
+			fs.Usage()
+			return Options{}, errors.New("--version does not accept a domain argument")
+		}
+
+		opts.Selectors = BuildSelectors(selectors)
+		return opts, nil
 	}
 
 	if fs.NArg() != 1 {
@@ -80,7 +94,9 @@ func normalizeArgs(args []string) ([]string, error) {
 		case strings.HasPrefix(arg, "--selector="),
 			strings.HasPrefix(arg, "--timeout="),
 			arg == "--json",
-			arg == "--no-color":
+			arg == "--no-color",
+			arg == "--no-progress",
+			arg == "--version":
 			normalized = append(normalized, arg)
 		case strings.HasPrefix(arg, "-"):
 			normalized = append(normalized, arg)
