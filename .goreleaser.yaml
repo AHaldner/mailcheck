@@ -13,7 +13,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/AHaldner/mailcheck/internal/version.Value={{ .Version }}
+      - -s -w -X github.com/AHaldner/mailcheck/internal/version.Value=v{{ .Version }}
     goos:
       - darwin
       - linux
