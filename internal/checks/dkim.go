@@ -2,9 +2,7 @@ package checks
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 
@@ -36,7 +34,7 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 		}
 
 		if result.err != nil && !isNotFoundError(result.err) {
-			lookupErrors = append(lookupErrors, fmt.Sprintf("%s: %v", result.selector, result.err))
+			lookupErrors = append(lookupErrors, lookupErrorDetail("selector "+result.selector, result.err))
 		}
 	}
 
@@ -53,7 +51,7 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 		return model.CheckResult{
 			Name:    "DKIM",
 			Status:  model.StatusPass,
-			Summary: dkimFoundSummary(foundSelectors),
+			Summary: dkimFoundSummary(domain, foundSelectors),
 			Details: details,
 		}, tried, foundSelectors
 	}
@@ -65,9 +63,9 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 	return model.CheckResult{
 		Name:       "DKIM",
 		Status:     model.StatusFail,
-		Summary:    fmt.Sprintf("no DKIM record found across %d selector candidates", len(tried)),
+		Summary:    fmt.Sprintf("DKIM via %s [%d selectors tried]: no matching record found", domain, len(tried)),
 		Details:    lookupErrors,
-		Suggestion: "try --selector <name> or use the selector from a real DKIM-Signature header",
+		Suggestion: "Try --selector <name> or use a selector from a real DKIM-Signature header.",
 	}, tried, nil
 }
 
@@ -174,22 +172,12 @@ func parseTagList(record string) map[string]string {
 	return tags
 }
 
-func dkimFoundSummary(found []string) string {
+func dkimFoundSummary(domain string, found []string) string {
 	if len(found) == 1 {
-		return fmt.Sprintf("found DKIM selector: %s", found[0])
+		return fmt.Sprintf("DKIM via %s [1 selector]: %s", domain, found[0])
 	}
 
-	return fmt.Sprintf("found %d DKIM selectors: %s", len(found), strings.Join(found, ", "))
-}
-
-func isNotFoundError(err error) bool {
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-		return true
-	}
-
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such host") || strings.Contains(message, "nxdomain")
+	return fmt.Sprintf("DKIM via %s [%d selectors]: %s", domain, len(found), strings.Join(found, ", "))
 }
 
 func detectProviderHints(ctx context.Context, r dns.Resolver, domain string, foundSelectors []string) []string {
@@ -215,7 +203,7 @@ func detectProviderHints(ctx context.Context, r dns.Resolver, domain string, fou
 		}
 
 		if len(recordTypes) > 0 {
-			details = append(details, fmt.Sprintf("detected Resend helper host %s (%s)", host, strings.Join(recordTypes, ", ")))
+			details = append(details, fmt.Sprintf("Resend helper host: %s (%s)", host, strings.Join(recordTypes, ", ")))
 		}
 	}
 

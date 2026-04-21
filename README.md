@@ -78,8 +78,8 @@ go test ./...
 Mailcheck: example.com
 Rating: A
 
-MX      PASS  2 records found
-SPF     PASS  v=spf1 include:_spf.google.com ~all
-DMARC   PASS  v=DMARC1; p=quarantine
-DKIM    PASS  found 2 DKIM selectors: google, selector1
+MX      PASS  MX via example.com [2 records]: 10 mx1.example.com., 20 mx2.example.com.
+SPF     PASS  SPF via example.com [1 record]: v=spf1 include:_spf.google.com ~all
+DMARC   PASS  DMARC via example.com [1 record]: v=DMARC1; p=quarantine
+DKIM    PASS  DKIM via example.com [2 selectors]: google, selector1
 ```

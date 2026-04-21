@@ -19,7 +19,7 @@ func CheckDMARC(ctx context.Context, r dns.Resolver, domain string) model.CheckR
 		return model.CheckResult{
 			Name:    "DMARC",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("lookup error: %v", err),
+			Summary: lookupFailureSummary("DMARC", domain, err),
 		}
 	}
 
@@ -33,29 +33,29 @@ func CheckDMARC(ctx context.Context, r dns.Resolver, domain string) model.CheckR
 		return model.CheckResult{
 			Name:    "DMARC",
 			Status:  model.StatusFail,
-			Summary: "no DMARC record found",
+			Summary: missingRecordSummary("DMARC", domain),
 		}
 	case 1:
 		if !hasTag(records[0], "p") {
 			return model.CheckResult{
 				Name:    "DMARC",
 				Status:  model.StatusFail,
-				Summary: "DMARC record missing p= policy",
-				Details: []string{records[0]},
+				Summary: invalidRecordSummary("DMARC", domain, "missing p= policy"),
+				Details: recordDetails(records[:1]),
 			}
 		}
 
 		return model.CheckResult{
 			Name:    "DMARC",
 			Status:  model.StatusPass,
-			Summary: records[0],
+			Summary: fmt.Sprintf("DMARC via %s [1 record]: %s", domain, records[0]),
 		}
 	default:
 		return model.CheckResult{
 			Name:    "DMARC",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("multiple DMARC records found (%d)", len(records)),
-			Details: records,
+			Summary: multipleRecordsSummary("DMARC", domain, len(records)),
+			Details: recordDetails(records),
 		}
 	}
 }
@@ -79,15 +79,15 @@ func checkInheritedDMARC(ctx context.Context, r dns.Resolver, domain string) *mo
 			result := model.CheckResult{
 				Name:    "DMARC",
 				Status:  model.StatusPass,
-				Summary: fmt.Sprintf("using inherited DMARC policy from %s: %s", parent, records[0]),
+				Summary: fmt.Sprintf("DMARC via %s [1 record]: %s", parent, records[0]),
 			}
 			return &result
 		default:
 			result := model.CheckResult{
 				Name:    "DMARC",
 				Status:  model.StatusFail,
-				Summary: fmt.Sprintf("multiple inherited DMARC records found on %s (%d)", parent, len(records)),
-				Details: records,
+				Summary: multipleRecordsSummary("DMARC", parent, len(records)),
+				Details: recordDetails(records),
 			}
 			return &result
 		}

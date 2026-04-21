@@ -19,11 +19,13 @@ func RenderText(result model.RunResult, noColor bool) (string, error) {
 
 	for _, check := range result.Checks {
 		status := string(check.Status)
+		summary := check.Summary
 		if !noColor {
 			status = colorize(check.Status, status)
+			summary = colorizeBracketMeta(summary)
 		}
 
-		fmt.Fprintf(&builder, "%-7s %-5s %s\n", check.Name, status, check.Summary)
+		fmt.Fprintf(&builder, "%-7s %-5s %s\n", check.Name, status, summary)
 	}
 
 	for _, check := range result.Checks {
@@ -35,6 +37,21 @@ func RenderText(result model.RunResult, noColor bool) (string, error) {
 	}
 
 	return builder.String(), nil
+}
+
+func colorizeBracketMeta(value string) string {
+	start := strings.IndexByte(value, '[')
+	if start == -1 {
+		return value
+	}
+
+	end := strings.IndexByte(value[start:], ']')
+	if end == -1 {
+		return value
+	}
+
+	end += start
+	return value[:start] + "\x1b[38;5;117m" + value[start:end+1] + "\x1b[0m" + value[end+1:]
 }
 
 func colorizeRating(rating string) string {

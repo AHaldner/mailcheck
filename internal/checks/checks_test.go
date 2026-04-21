@@ -48,6 +48,13 @@ func TestCheckSPFFailsOnMultipleRecords(t *testing.T) {
 	if got.Status != model.StatusFail {
 		t.Fatalf("status = %s, want FAIL", got.Status)
 	}
+
+	if !slices.Equal(got.Details, []string{
+		"record 1: v=spf1 include:_spf.one ~all",
+		"record 2: v=spf1 include:_spf.two ~all",
+	}) {
+		t.Fatalf("details = %v", got.Details)
+	}
 }
 
 func TestCheckDMARCFailsWithoutPolicy(t *testing.T) {
@@ -60,6 +67,27 @@ func TestCheckDMARCFailsWithoutPolicy(t *testing.T) {
 	got := CheckDMARC(context.Background(), r, "example.com")
 	if got.Status != model.StatusFail {
 		t.Fatalf("status = %s, want FAIL", got.Status)
+	}
+
+	if !slices.Equal(got.Details, []string{"record 1: v=DMARC1; rua=mailto:d@example.com"}) {
+		t.Fatalf("details = %v", got.Details)
+	}
+}
+
+func TestCheckMXFailsWithFriendlyLookupSummary(t *testing.T) {
+	r := fakeResolver{
+		mxErr: map[string]error{
+			"example.com": errors.New("no such host"),
+		},
+	}
+
+	got := CheckMX(context.Background(), r, "example.com")
+	if got.Status != model.StatusFail {
+		t.Fatalf("status = %s, want FAIL", got.Status)
+	}
+
+	if got.Summary != "MX via example.com [lookup failed]: domain not found in DNS" {
+		t.Fatalf("summary = %q", got.Summary)
 	}
 }
 
@@ -120,7 +148,7 @@ func TestCheckDMARCInheritsFromParentDomain(t *testing.T) {
 		t.Fatalf("status = %s, want PASS", got.Status)
 	}
 
-	if !strings.Contains(got.Summary, "inherited DMARC policy from example.com") {
+	if !strings.Contains(got.Summary, "DMARC via example.com [1 record]") {
 		t.Fatalf("summary = %q, want inherited DMARC", got.Summary)
 	}
 }
@@ -129,7 +157,7 @@ func TestCheckDKIMFailsWhenNoSelectorMatches(t *testing.T) {
 	r := fakeResolver{
 		txtErr: map[string]error{
 			"default._domainkey.example.com":   errors.New("not found"),
-			"selector1._domainkey.example.com": errors.New("not found"),
+			"selector1._domainkey.example.com": errors.New("SERVFAIL"),
 		},
 	}
 
@@ -146,8 +174,12 @@ func TestCheckDKIMFailsWhenNoSelectorMatches(t *testing.T) {
 		t.Fatalf("len(found) = %d, want 0", len(found))
 	}
 
-	if !strings.Contains(got.Summary, "no DKIM record found") {
+	if !strings.Contains(got.Summary, "DKIM via example.com") || !strings.Contains(got.Summary, "no matching record found") {
 		t.Fatalf("summary = %q, want DKIM miss", got.Summary)
+	}
+
+	if !containsString(got.Details, "selector selector1 [lookup failed]: SERVFAIL") {
+		t.Fatalf("details = %v, want friendly DKIM lookup detail", got.Details)
 	}
 }
 
@@ -181,7 +213,7 @@ func TestCheckDKIMPassesAndReturnsFoundSelectors(t *testing.T) {
 		t.Fatalf("found = %v, want [resend]", found)
 	}
 
-	if !strings.Contains(got.Summary, "resend") {
+	if !strings.Contains(got.Summary, "DKIM via example.com [1 selector]: resend") {
 		t.Fatalf("summary = %q, want resend selector", got.Summary)
 	}
 
@@ -189,7 +221,7 @@ func TestCheckDKIMPassesAndReturnsFoundSelectors(t *testing.T) {
 		t.Fatalf("details = %v, want resend fqdn", got.Details)
 	}
 
-	if !containsSubstring(got.Details, "detected Resend helper host send.example.com") {
+	if !containsSubstring(got.Details, "Resend helper host: send.example.com") {
 		t.Fatalf("details = %v, want resend helper host detail", got.Details)
 	}
 }

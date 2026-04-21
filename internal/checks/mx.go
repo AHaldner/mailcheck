@@ -22,7 +22,7 @@ func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResu
 		return model.CheckResult{
 			Name:    "MX",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("lookup error: %v", err),
+			Summary: lookupFailureSummary("MX", domain, err),
 		}
 	}
 
@@ -36,7 +36,7 @@ func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResu
 		return model.CheckResult{
 			Name:    "MX",
 			Status:  model.StatusFail,
-			Summary: "no MX records found",
+			Summary: missingRecordSummary("MX", domain),
 		}
 	}
 
@@ -44,6 +44,7 @@ func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResu
 		if records[i].Pref == records[j].Pref {
 			return records[i].Host < records[j].Host
 		}
+
 		return records[i].Pref < records[j].Pref
 	})
 
@@ -52,10 +53,18 @@ func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResu
 		parts = append(parts, fmt.Sprintf("%d %s", record.Pref, record.Host))
 	}
 
+	if len(records) == 1 {
+		return model.CheckResult{
+			Name:    "MX",
+			Status:  model.StatusPass,
+			Summary: fmt.Sprintf("MX via %s [1 record]: %s", domain, parts[0]),
+		}
+	}
+
 	return model.CheckResult{
 		Name:    "MX",
 		Status:  model.StatusPass,
-		Summary: fmt.Sprintf("%d records found: %s", len(records), strings.Join(parts, ", ")),
+		Summary: fmt.Sprintf("MX via %s [%d records]: %s", domain, len(records), strings.Join(parts, ", ")),
 	}
 }
 
@@ -69,6 +78,7 @@ func checkHelperMX(ctx context.Context, r dns.Resolver, host string) *model.Chec
 		if records[i].Pref == records[j].Pref {
 			return records[i].Host < records[j].Host
 		}
+
 		return records[i].Pref < records[j].Pref
 	})
 
@@ -77,10 +87,20 @@ func checkHelperMX(ctx context.Context, r dns.Resolver, host string) *model.Chec
 		parts = append(parts, fmt.Sprintf("%d %s", record.Pref, record.Host))
 	}
 
+	if len(records) == 1 {
+		result := model.CheckResult{
+			Name:    "MX",
+			Status:  model.StatusPass,
+			Summary: fmt.Sprintf("MX via %s [1 record]: %s", host, parts[0]),
+		}
+
+		return &result
+	}
+
 	result := model.CheckResult{
 		Name:    "MX",
 		Status:  model.StatusPass,
-		Summary: fmt.Sprintf("using helper host %s with %d MX record(s): %s", host, len(records), strings.Join(parts, ", ")),
+		Summary: fmt.Sprintf("MX via %s [%d records]: %s", host, len(records), strings.Join(parts, ", ")),
 	}
 
 	return &result

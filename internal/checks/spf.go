@@ -21,7 +21,7 @@ func CheckSPF(ctx context.Context, r dns.Resolver, domain string) model.CheckRes
 		return model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("lookup error: %v", err),
+			Summary: lookupFailureSummary("SPF", domain, err),
 		}
 	}
 
@@ -37,20 +37,20 @@ func CheckSPF(ctx context.Context, r dns.Resolver, domain string) model.CheckRes
 		return model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusFail,
-			Summary: "no SPF record found",
+			Summary: missingRecordSummary("SPF", domain),
 		}
 	case 1:
 		return model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusPass,
-			Summary: records[0],
+			Summary: fmt.Sprintf("SPF via %s [1 record]: %s", domain, records[0]),
 		}
 	default:
 		return model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("multiple SPF records found (%d)", len(records)),
-			Details: records,
+			Summary: multipleRecordsSummary("SPF", domain, len(records)),
+			Details: recordDetails(records),
 		}
 	}
 }
@@ -69,15 +69,15 @@ func checkHelperSPF(ctx context.Context, r dns.Resolver, host string) *model.Che
 		result := model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusPass,
-			Summary: fmt.Sprintf("using helper host %s: %s", host, records[0]),
+			Summary: fmt.Sprintf("SPF via %s [1 record]: %s", host, records[0]),
 		}
 		return &result
 	default:
 		result := model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusFail,
-			Summary: fmt.Sprintf("multiple SPF records found on helper host %s (%d)", host, len(records)),
-			Details: records,
+			Summary: multipleRecordsSummary("SPF", host, len(records)),
+			Details: recordDetails(records),
 		}
 		return &result
 	}
