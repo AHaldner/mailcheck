@@ -13,10 +13,10 @@ import (
 func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResult {
 	records, err := r.LookupMX(ctx, domain)
 	if err != nil {
-		if isSubdomain(domain) {
-			if fallback := checkHelperMX(ctx, r, resendHelperHost(domain)); fallback != nil {
-				return *fallback
-			}
+		if fallback := checkSubdomainHelperResult(domain, func(host string) *model.CheckResult {
+			return checkHelperMX(ctx, r, host)
+		}); fallback != nil {
+			return *fallback
 		}
 
 		return model.CheckResult{
@@ -27,10 +27,10 @@ func CheckMX(ctx context.Context, r dns.Resolver, domain string) model.CheckResu
 	}
 
 	if len(records) == 0 {
-		if isSubdomain(domain) {
-			if fallback := checkHelperMX(ctx, r, resendHelperHost(domain)); fallback != nil {
-				return *fallback
-			}
+		if fallback := checkSubdomainHelperResult(domain, func(host string) *model.CheckResult {
+			return checkHelperMX(ctx, r, host)
+		}); fallback != nil {
+			return *fallback
 		}
 
 		return model.CheckResult{

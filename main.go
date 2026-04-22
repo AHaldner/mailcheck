@@ -28,19 +28,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if opts.Version {
-		if _, err := fmt.Fprintln(stdout, appversion.Current()); err != nil {
-			fmt.Fprintf(stderr, "error: failed to write version: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeFlagOutput(stdout, stderr, "version", appversion.Current())
 	}
 
 	if opts.Help {
-		if _, err := fmt.Fprintln(stdout, help.GetHelp()); err != nil {
-			fmt.Fprintf(stderr, "error: failed to write help: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeFlagOutput(stdout, stderr, "help", help.GetHelp())
 	}
 
 	if err := cli.ValidateDomain(opts.Domain); err != nil {
@@ -109,4 +101,13 @@ func hasFail(checks []model.CheckResult) bool {
 	}
 
 	return false
+}
+
+func writeFlagOutput(stdout io.Writer, stderr io.Writer, name string, value string) int {
+	if _, err := fmt.Fprintln(stdout, value); err != nil {
+		fmt.Fprintf(stderr, "error: failed to write %s: %v\n", name, err)
+		return 1
+	}
+
+	return 0
 }

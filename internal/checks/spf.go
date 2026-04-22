@@ -12,10 +12,10 @@ import (
 func CheckSPF(ctx context.Context, r dns.Resolver, domain string) model.CheckResult {
 	txts, err := r.LookupTXT(ctx, domain)
 	if err != nil {
-		if isSubdomain(domain) {
-			if fallback := checkHelperSPF(ctx, r, resendHelperHost(domain)); fallback != nil {
-				return *fallback
-			}
+		if fallback := checkSubdomainHelperResult(domain, func(host string) *model.CheckResult {
+			return checkHelperSPF(ctx, r, host)
+		}); fallback != nil {
+			return *fallback
 		}
 
 		return model.CheckResult{
@@ -28,10 +28,10 @@ func CheckSPF(ctx context.Context, r dns.Resolver, domain string) model.CheckRes
 	records := matchingRecords(txts, "v=spf1")
 	switch len(records) {
 	case 0:
-		if isSubdomain(domain) {
-			if fallback := checkHelperSPF(ctx, r, resendHelperHost(domain)); fallback != nil {
-				return *fallback
-			}
+		if fallback := checkSubdomainHelperResult(domain, func(host string) *model.CheckResult {
+			return checkHelperSPF(ctx, r, host)
+		}); fallback != nil {
+			return *fallback
 		}
 
 		return model.CheckResult{

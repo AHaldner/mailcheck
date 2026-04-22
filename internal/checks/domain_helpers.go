@@ -1,6 +1,10 @@
 package checks
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/AHaldner/mailcheck/internal/model"
+)
 
 func isSubdomain(domain string) bool {
 	return strings.Count(domain, ".") >= 2
@@ -8,6 +12,14 @@ func isSubdomain(domain string) bool {
 
 func resendHelperHost(domain string) string {
 	return "send." + domain
+}
+
+func checkSubdomainHelperResult(domain string, lookup func(host string) *model.CheckResult) *model.CheckResult {
+	if !isSubdomain(domain) {
+		return nil
+	}
+
+	return lookup(resendHelperHost(domain))
 }
 
 func parentDomains(domain string) []string {
