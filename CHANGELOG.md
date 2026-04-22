@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.1.2 - 2026-04-22
+
+### Features
+- add help command and shorthand flags
+
+### Fixes
+- improve user feedback strings
+
+### Refactors
+- move duplicate functions into helper functions
+
+### CI
+- add test and changelog workflow
+
 ## v1.1.1 - 2026-04-21
 
 ### Fixes
