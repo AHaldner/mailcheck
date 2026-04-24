@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AHaldner/mailcheck/internal/cli"
 	internaldns "github.com/AHaldner/mailcheck/internal/dns"
@@ -210,6 +211,56 @@ func TestRunChecksAdvancedIncludesDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRunChecksUsesCallerTimeoutForDKIM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result := runChecks(ctx, dkimDeadlineResolver{}, cli.Options{Domain: "example.com"})
+	dkim := checkByName(result.Checks, "DKIM")
+	if dkim.Status != model.StatusPass {
+		t.Fatalf("DKIM status = %s, want PASS; summary = %q details = %v", dkim.Status, dkim.Summary, dkim.Details)
+	}
+}
+
+func TestRunChecksStartsCoreChecksConcurrently(t *testing.T) {
+	resolver := newConcurrentStartResolver()
+	done := make(chan model.RunResult, 1)
+
+	go func() {
+		done <- runChecks(context.Background(), resolver, cli.Options{Domain: "example.com"})
+	}()
+
+	wantStarted := map[string]bool{
+		"mx":    false,
+		"spf":   false,
+		"dmarc": false,
+		"dkim":  false,
+	}
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		if allStarted(wantStarted) {
+			close(resolver.release)
+			break
+		}
+
+		select {
+		case name := <-resolver.started:
+			wantStarted[name] = true
+		case <-deadline:
+			t.Fatalf("checks did not start concurrently; started = %v", wantStarted)
+		}
+	}
+
+	select {
+	case result := <-done:
+		if got := checkNames(result.Checks); !slices.Equal(got, []string{"MX", "SPF", "DMARC", "DKIM"}) {
+			t.Fatalf("check names = %v", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runChecks did not finish after releasing lookups")
+	}
+}
+
 func checkNames(checks []model.CheckResult) []string {
 	names := make([]string, 0, len(checks))
 	for _, check := range checks {
@@ -219,7 +270,89 @@ func checkNames(checks []model.CheckResult) []string {
 	return names
 }
 
+func checkByName(checks []model.CheckResult, name string) model.CheckResult {
+	for _, check := range checks {
+		if check.Name == name {
+			return check
+		}
+	}
+
+	return model.CheckResult{}
+}
+
+func allStarted(started map[string]bool) bool {
+	for _, ok := range started {
+		if !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
 type mainFakeResolver struct{}
+
+type dkimDeadlineResolver struct {
+	mainFakeResolver
+}
+
+type concurrentStartResolver struct {
+	mainFakeResolver
+	started chan string
+	release chan struct{}
+}
+
+func newConcurrentStartResolver() *concurrentStartResolver {
+	return &concurrentStartResolver{
+		started: make(chan string, 4),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *concurrentStartResolver) waitForRelease(name string) {
+	select {
+	case r.started <- name:
+	default:
+	}
+	<-r.release
+}
+
+func (r *concurrentStartResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	if domain == "example.com" {
+		r.waitForRelease("mx")
+	}
+
+	return r.mainFakeResolver.LookupMX(ctx, domain)
+}
+
+func (r *concurrentStartResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	switch name {
+	case "example.com":
+		r.waitForRelease("spf")
+	case "_dmarc.example.com":
+		r.waitForRelease("dmarc")
+	case "google._domainkey.example.com":
+		r.waitForRelease("dkim")
+	}
+
+	return r.mainFakeResolver.LookupTXT(ctx, name)
+}
+
+func (dkimDeadlineResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	if name != "google._domainkey.example.com" {
+		return mainFakeResolver{}.LookupTXT(ctx, name)
+	}
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("missing deadline")
+	}
+	if time.Until(deadline) < 5*time.Second {
+		return nil, errors.New("deadline too short")
+	}
+
+	return []string{"v=DKIM1; p=abc123"}, nil
+}
 
 func (mainFakeResolver) LookupMX(_ context.Context, domain string) ([]*net.MX, error) {
 	if domain != "example.com" {

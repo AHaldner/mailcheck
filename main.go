@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/AHaldner/mailcheck/internal/checks"
 	"github.com/AHaldner/mailcheck/internal/cli"
@@ -86,6 +87,8 @@ type progressStarter interface {
 }
 
 func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, progress ...progressStarter) model.RunResult {
+	resolver = dns.NewCachedResolver(resolver)
+
 	start := func(name string) {
 		if len(progress) > 0 && progress[0] != nil {
 			progress[0].Start(name)
@@ -97,46 +100,84 @@ func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, pr
 		capacity = 11
 	}
 
-	results := make([]model.CheckResult, 0, capacity)
-	start("MX")
-	results = append(results, checks.CheckMX(ctx, resolver, opts.Domain))
+	results := make([]model.CheckResult, capacity)
+	selectorsTried := []string(nil)
+	selectorsFound := []string(nil)
 
-	start("SPF")
-	results = append(results, checks.CheckSPF(ctx, resolver, opts.Domain))
-
-	start("DMARC")
-	results = append(results, checks.CheckDMARC(ctx, resolver, opts.Domain))
-
-	start("DKIM")
-	dkimCtx, dkimCancel := context.WithTimeout(ctx, cli.DefaultDKIMTimeout)
-	dkimResult, selectorsTried, selectorsFound := checks.CheckDKIM(dkimCtx, resolver, opts.Domain, checks.DKIMOptions{
-		Selectors: opts.Selectors,
-		Deep:      opts.DeepDKIM,
-	})
-	dkimCancel()
-	results = append(results, dkimResult)
+	runBatch(start, []checkTask{
+		{
+			name: "MX",
+			run: func() model.CheckResult {
+				return checks.CheckMX(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "SPF",
+			run: func() model.CheckResult {
+				return checks.CheckSPF(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "DMARC",
+			run: func() model.CheckResult {
+				return checks.CheckDMARC(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "DKIM",
+			run: func() model.CheckResult {
+				result, tried, found := checks.CheckDKIM(ctx, resolver, opts.Domain, checks.DKIMOptions{
+					Selectors: opts.Selectors,
+					Deep:      opts.DeepDKIM,
+				})
+				selectorsTried = tried
+				selectorsFound = found
+				return result
+			},
+		},
+	}, results)
 
 	if opts.Advanced {
-		start("MX-A")
-		results = append(results, checks.CheckMXA(ctx, resolver, opts.Domain))
-
-		start("MX-AAAA")
-		results = append(results, checks.CheckMXAAAA(ctx, resolver, opts.Domain))
-
-		start("PTR")
-		results = append(results, checks.CheckPTR(ctx, resolver, opts.Domain))
-
-		start("NS")
-		results = append(results, checks.CheckNS(ctx, resolver, opts.Domain))
-
-		start("SOA")
-		results = append(results, checks.CheckSOA(ctx, resolver, opts.Domain))
-
-		start("DNSSEC")
-		results = append(results, checks.CheckDNSSEC(ctx, resolver, opts.Domain))
-
+		runBatch(start, []checkTask{
+			{
+				name: "MX-A",
+				run: func() model.CheckResult {
+					return checks.CheckMXA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "MX-AAAA",
+				run: func() model.CheckResult {
+					return checks.CheckMXAAAA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "PTR",
+				run: func() model.CheckResult {
+					return checks.CheckPTR(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "NS",
+				run: func() model.CheckResult {
+					return checks.CheckNS(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "SOA",
+				run: func() model.CheckResult {
+					return checks.CheckSOA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "DNSSEC",
+				run: func() model.CheckResult {
+					return checks.CheckDNSSEC(ctx, resolver, opts.Domain)
+				},
+			},
+		}, results[4:])
 		start("DNS-TIME")
-		results = append(results, checks.CheckDNSTime(resolver))
+		results[10] = checks.CheckDNSTime(resolver)
 	}
 
 	runResult := model.RunResult{
@@ -148,6 +189,26 @@ func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, pr
 	runResult.Rating, runResult.RatingReason = model.RatingFromChecksWithReason(runResult.Checks)
 
 	return runResult
+}
+
+type checkTask struct {
+	name string
+	run  func() model.CheckResult
+}
+
+func runBatch(start func(string), tasks []checkTask, results []model.CheckResult) {
+	var wg sync.WaitGroup
+	for index, task := range tasks {
+		start(task.name)
+		wg.Add(1)
+
+		go func(index int, task checkTask) {
+			defer wg.Done()
+			results[index] = task.run()
+		}(index, task)
+	}
+
+	wg.Wait()
 }
 
 func checkCount(opts cli.Options) int {

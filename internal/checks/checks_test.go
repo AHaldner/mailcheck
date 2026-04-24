@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	internaldns "github.com/AHaldner/mailcheck/internal/dns"
 	"github.com/AHaldner/mailcheck/internal/model"
@@ -406,6 +407,15 @@ func TestDKIMDefaultCandidatesStayBoundedAndIncludeExplicitSelectors(t *testing.
 	}
 }
 
+func TestDKIMExplicitSelectorsAreTriedFirst(t *testing.T) {
+	got := dkimSelectorCandidates([]string{"custom", "google"}, false)
+
+	wantPrefix := []string{"custom", "google"}
+	if !slices.Equal(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("candidate prefix = %v, want %v", got[:len(wantPrefix)], wantPrefix)
+	}
+}
+
 func TestDKIMDeepCandidatesUseExtendedSelectorSweep(t *testing.T) {
 	fast := dkimSelectorCandidates(nil, false)
 	deep := dkimSelectorCandidates(nil, true)
@@ -492,6 +502,37 @@ func TestCheckDKIMPassesAndReturnsFoundSelectors(t *testing.T) {
 	}
 }
 
+func TestCheckDKIMReturnsAfterFirstMatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct {
+		result model.CheckResult
+		found  []string
+	}, 1)
+	go func() {
+		result, _, found := CheckDKIM(ctx, blockingDKIMResolver{}, "example.com", DKIMOptions{
+			Selectors: []string{"custom"},
+		})
+		done <- struct {
+			result model.CheckResult
+			found  []string
+		}{result: result, found: found}
+	}()
+
+	select {
+	case got := <-done:
+		if got.result.Status != model.StatusPass {
+			t.Fatalf("status = %s, want PASS", got.result.Status)
+		}
+		if !slices.Equal(got.found, []string{"custom"}) {
+			t.Fatalf("found = %v, want [custom]", got.found)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("CheckDKIM waited for slow missing selectors after finding a valid DKIM record")
+	}
+}
+
 func TestCheckDKIMIgnoresInvalidRecords(t *testing.T) {
 	r := fakeResolver{
 		txt: map[string][]string{
@@ -512,6 +553,19 @@ func TestCheckDKIMIgnoresInvalidRecords(t *testing.T) {
 	if len(found) != 0 {
 		t.Fatalf("found = %v, want no selectors", found)
 	}
+}
+
+type blockingDKIMResolver struct {
+	fakeResolver
+}
+
+func (blockingDKIMResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	if name == "custom._domainkey.example.com" {
+		return []string{"v=DKIM1; p=abc123"}, nil
+	}
+
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestCheckPTRPassesWithForwardConfirmedReverseDNS(t *testing.T) {

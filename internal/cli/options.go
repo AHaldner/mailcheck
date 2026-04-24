@@ -12,7 +12,6 @@ import (
 )
 
 const DefaultTimeout = 30 * time.Second
-const DefaultDKIMTimeout = 2 * time.Second
 
 type Options struct {
 	Domain     string

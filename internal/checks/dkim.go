@@ -83,6 +83,9 @@ func dkimSuggestion(deep bool) string {
 }
 
 func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, selectors []string) []dkimLookupResult {
+	lookupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	results := make(chan dkimLookupResult, len(selectors))
 	sem := make(chan struct{}, min(dkimConcurrentLookups, len(selectors)))
 
@@ -95,8 +98,8 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results <- dkimLookupResult{index: index, selector: selector, err: ctx.Err()}
+			case <-lookupCtx.Done():
+				results <- dkimLookupResult{index: index, selector: selector, err: lookupCtx.Err()}
 				return
 			}
 			defer func() {
@@ -104,7 +107,7 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 			}()
 
 			fqdn := selector + "._domainkey." + domain
-			txts, err := r.LookupTXT(ctx, fqdn)
+			txts, err := r.LookupTXT(lookupCtx, fqdn)
 			if err != nil {
 				results <- dkimLookupResult{
 					index:    index,
@@ -130,8 +133,25 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 	}()
 
 	ordered := make([]dkimLookupResult, len(selectors))
+	collected := make([]bool, len(selectors))
 	for result := range results {
 		ordered[result.index] = result
+		collected[result.index] = true
+		if len(result.records) > 0 {
+			cancel()
+			return collectedDKIMResults(ordered, collected)
+		}
+	}
+
+	return ordered
+}
+
+func collectedDKIMResults(results []dkimLookupResult, collected []bool) []dkimLookupResult {
+	ordered := make([]dkimLookupResult, 0, len(results))
+	for index, result := range results {
+		if collected[index] {
+			ordered = append(ordered, result)
+		}
 	}
 
 	return ordered

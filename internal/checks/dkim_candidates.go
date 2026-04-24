@@ -254,6 +254,10 @@ func dkimSelectorCandidates(explicit []string, deep bool) []string {
 		candidates = append(candidates, selector)
 	}
 
+	for _, selector := range explicit {
+		add(selector)
+	}
+
 	if deep {
 		for selector := range strings.FieldsSeq(curatedDKIMSelectors) {
 			add(selector)
@@ -274,18 +278,10 @@ func dkimSelectorCandidates(explicit []string, deep bool) []string {
 			add(selector)
 		}
 
-		for _, selector := range explicit {
-			add(selector)
-		}
-
 		return candidates
 	}
 
 	for _, selector := range fastDKIMSelectors {
-		add(selector)
-	}
-
-	for _, selector := range explicit {
 		add(selector)
 	}
 
