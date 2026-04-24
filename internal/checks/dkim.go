@@ -12,6 +12,11 @@ import (
 
 const dkimConcurrentLookups = 24
 
+type DKIMOptions struct {
+	Selectors []string
+	Deep      bool
+}
+
 type dkimLookupResult struct {
 	index    int
 	selector string
@@ -20,8 +25,8 @@ type dkimLookupResult struct {
 	err      error
 }
 
-func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []string) (model.CheckResult, []string, []string) {
-	tried := defaultDKIMSelectorCandidates(selectors)
+func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, opts DKIMOptions) (model.CheckResult, []string, []string) {
+	tried := dkimSelectorCandidates(opts.Selectors, opts.Deep)
 	results := lookupDKIMSelectors(ctx, r, domain, tried)
 
 	found := make([]dkimLookupResult, 0)
@@ -51,7 +56,7 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 		return model.CheckResult{
 			Name:    "DKIM",
 			Status:  model.StatusPass,
-			Summary: dkimFoundSummary(domain, foundSelectors),
+			Summary: "DKIM records found for common selectors",
 			Details: details,
 		}, tried, foundSelectors
 	}
@@ -62,53 +67,65 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 
 	return model.CheckResult{
 		Name:       "DKIM",
-		Status:     model.StatusFail,
-		Summary:    fmt.Sprintf("DKIM via %s [%d selectors tried]: no matching record found", domain, len(tried)),
+		Status:     model.StatusWarn,
+		Summary:    "DKIM records were not found for guessed selectors",
 		Details:    lookupErrors,
-		Suggestion: "Try --selector <name> or use a selector from a real DKIM-Signature header.",
+		Suggestion: dkimSuggestion(opts.Deep),
 	}, tried, nil
 }
 
+func dkimSuggestion(deep bool) string {
+	if deep {
+		return "Try --selector <name> or use a selector from a real DKIM-Signature header."
+	}
+
+	return "Try --selector <name>, --dkim-deep, or use a selector from a real DKIM-Signature header."
+}
+
 func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, selectors []string) []dkimLookupResult {
+	lookupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	results := make(chan dkimLookupResult, len(selectors))
-	sem := make(chan struct{}, min(dkimConcurrentLookups, len(selectors)))
+	jobs := make(chan dkimLookupResult, len(selectors))
+	for index, selector := range selectors {
+		jobs <- dkimLookupResult{index: index, selector: selector}
+	}
+	close(jobs)
 
 	var wg sync.WaitGroup
-	for index, selector := range selectors {
+	for range min(dkimConcurrentLookups, len(selectors)) {
 		wg.Add(1)
-
-		go func(index int, selector string) {
+		go func() {
 			defer wg.Done()
-
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results <- dkimLookupResult{index: index, selector: selector, err: ctx.Err()}
-				return
-			}
-			defer func() {
-				<-sem
-			}()
-
-			fqdn := selector + "._domainkey." + domain
-			txts, err := r.LookupTXT(ctx, fqdn)
-			if err != nil {
-				results <- dkimLookupResult{
-					index:    index,
-					selector: selector,
-					fqdn:     fqdn,
-					err:      err,
+			for job := range jobs {
+				select {
+				case <-lookupCtx.Done():
+					results <- dkimLookupResult{index: job.index, selector: job.selector, err: lookupCtx.Err()}
+					continue
+				default:
 				}
-				return
-			}
 
-			results <- dkimLookupResult{
-				index:    index,
-				selector: selector,
-				fqdn:     fqdn,
-				records:  matchingDKIMRecords(txts),
+				fqdn := job.selector + "._domainkey." + domain
+				txts, err := r.LookupTXT(lookupCtx, fqdn)
+				if err != nil {
+					results <- dkimLookupResult{
+						index:    job.index,
+						selector: job.selector,
+						fqdn:     fqdn,
+						err:      err,
+					}
+					continue
+				}
+
+				results <- dkimLookupResult{
+					index:    job.index,
+					selector: job.selector,
+					fqdn:     fqdn,
+					records:  matchingDKIMRecords(txts),
+				}
 			}
-		}(index, selector)
+		}()
 	}
 
 	go func() {
@@ -117,8 +134,25 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 	}()
 
 	ordered := make([]dkimLookupResult, len(selectors))
+	collected := make([]bool, len(selectors))
 	for result := range results {
 		ordered[result.index] = result
+		collected[result.index] = true
+		if len(result.records) > 0 {
+			cancel()
+			return collectedDKIMResults(ordered, collected)
+		}
+	}
+
+	return ordered
+}
+
+func collectedDKIMResults(results []dkimLookupResult, collected []bool) []dkimLookupResult {
+	ordered := make([]dkimLookupResult, 0, len(results))
+	for index, result := range results {
+		if collected[index] {
+			ordered = append(ordered, result)
+		}
 	}
 
 	return ordered

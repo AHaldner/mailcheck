@@ -40,10 +40,21 @@ func CheckSPF(ctx context.Context, r dns.Resolver, domain string) model.CheckRes
 			Summary: missingRecordSummary("SPF", domain),
 		}
 	case 1:
+		if warning := spfPolicyWarning(records[0]); warning != "" {
+			return model.CheckResult{
+				Name:       "SPF",
+				Status:     model.StatusWarn,
+				Summary:    "SPF is valid but " + warning,
+				Details:    []string{fmt.Sprintf("SPF via %s: %s", domain, records[0])},
+				Suggestion: "End SPF with -all or ~all so receivers know how to handle unauthorized senders.",
+			}
+		}
+
 		return model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusPass,
-			Summary: fmt.Sprintf("SPF via %s [1 record]: %s", domain, records[0]),
+			Summary: spfPassSummary(records[0]),
+			Details: []string{fmt.Sprintf("SPF via %s: %s", domain, records[0])},
 		}
 	default:
 		return model.CheckResult{
@@ -66,10 +77,22 @@ func checkHelperSPF(ctx context.Context, r dns.Resolver, host string) *model.Che
 	case 0:
 		return nil
 	case 1:
+		if warning := spfPolicyWarning(records[0]); warning != "" {
+			result := model.CheckResult{
+				Name:       "SPF",
+				Status:     model.StatusWarn,
+				Summary:    "SPF is valid but " + warning,
+				Details:    []string{fmt.Sprintf("SPF via %s: %s", host, records[0])},
+				Suggestion: "End SPF with -all or ~all so receivers know how to handle unauthorized senders.",
+			}
+			return &result
+		}
+
 		result := model.CheckResult{
 			Name:    "SPF",
 			Status:  model.StatusPass,
-			Summary: fmt.Sprintf("SPF via %s [1 record]: %s", host, records[0]),
+			Summary: spfPassSummary(records[0]),
+			Details: []string{fmt.Sprintf("SPF via %s: %s", host, records[0])},
 		}
 		return &result
 	default:
@@ -94,4 +117,31 @@ func matchingRecords(records []string, prefix string) []string {
 	}
 
 	return matches
+}
+
+func spfPolicyWarning(record string) string {
+	fields := strings.Fields(record)
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(strings.ToLower(field), "redirect=") {
+			return ""
+		}
+
+		mechanism := strings.TrimLeft(field, "+-~?")
+		if strings.EqualFold(mechanism, "all") {
+			if strings.HasPrefix(field, "+") || field == "all" {
+				return "all mail is allowed"
+			}
+			return ""
+		}
+	}
+
+	return "missing terminal all mechanism"
+}
+
+func spfPassSummary(record string) string {
+	if strings.Contains(strings.ToLower(record), "redirect=") {
+		return "SPF is valid and delegates with redirect"
+	}
+
+	return "SPF is valid and ends with -all"
 }

@@ -1,11 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/AHaldner/mailcheck/internal/cli"
+	internaldns "github.com/AHaldner/mailcheck/internal/dns"
 	"github.com/AHaldner/mailcheck/internal/help"
+	"github.com/AHaldner/mailcheck/internal/model"
 	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
 
@@ -153,7 +161,7 @@ func TestRunDoesNotEmitProgressToNonTTYStderr(t *testing.T) {
 		t.Fatalf("ReadFile(stderr) error = %v", err)
 	}
 
-	if strings.Contains(string(stderrData), "Checking MX") {
+	if strings.Contains(string(stderrData), "MX") {
 		t.Fatalf("stderr contained progress output:\n%s", string(stderrData))
 	}
 }
@@ -178,7 +186,228 @@ func TestRunJSONDoesNotEmitProgress(t *testing.T) {
 		t.Fatalf("ReadFile(stderr) error = %v", err)
 	}
 
-	if strings.Contains(string(stderrData), "Checking ") {
+	if strings.Contains(string(stderrData), "[") {
 		t.Fatalf("stderr contained progress output in json mode:\n%s", string(stderrData))
 	}
+}
+
+func TestRunChecksDefaultsToCoreChecks(t *testing.T) {
+	result := runChecks(context.Background(), mainFakeResolver{}, cli.Options{Domain: "example.com"})
+	got := checkNames(result.Checks)
+	want := []string{"MX", "SPF", "DMARC", "DKIM"}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("check names = %v, want %v", got, want)
+	}
+}
+
+func TestRunChecksAdvancedIncludesDiagnostics(t *testing.T) {
+	result := runChecks(context.Background(), mainFakeResolver{}, cli.Options{Domain: "example.com", Advanced: true})
+	got := checkNames(result.Checks)
+	want := []string{"MX", "SPF", "DMARC", "DKIM", "MX-A", "MX-AAAA", "PTR", "NS", "SOA", "DNSSEC", "DNS-TIME"}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("check names = %v, want %v", got, want)
+	}
+}
+
+func TestRunChecksUsesCallerTimeoutForDKIM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result := runChecks(ctx, dkimDeadlineResolver{}, cli.Options{Domain: "example.com"})
+	dkim := checkByName(result.Checks, "DKIM")
+	if dkim.Status != model.StatusPass {
+		t.Fatalf("DKIM status = %s, want PASS; summary = %q details = %v", dkim.Status, dkim.Summary, dkim.Details)
+	}
+}
+
+func TestRunChecksStartsCoreChecksConcurrently(t *testing.T) {
+	resolver := newConcurrentStartResolver()
+	done := make(chan model.RunResult, 1)
+
+	go func() {
+		done <- runChecks(context.Background(), resolver, cli.Options{Domain: "example.com"})
+	}()
+
+	wantStarted := map[string]bool{
+		"mx":    false,
+		"spf":   false,
+		"dmarc": false,
+		"dkim":  false,
+	}
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		if allStarted(wantStarted) {
+			close(resolver.release)
+			break
+		}
+
+		select {
+		case name := <-resolver.started:
+			wantStarted[name] = true
+		case <-deadline:
+			t.Fatalf("checks did not start concurrently; started = %v", wantStarted)
+		}
+	}
+
+	select {
+	case result := <-done:
+		if got := checkNames(result.Checks); !slices.Equal(got, []string{"MX", "SPF", "DMARC", "DKIM"}) {
+			t.Fatalf("check names = %v", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runChecks did not finish after releasing lookups")
+	}
+}
+
+func checkNames(checks []model.CheckResult) []string {
+	names := make([]string, 0, len(checks))
+	for _, check := range checks {
+		names = append(names, check.Name)
+	}
+
+	return names
+}
+
+func checkByName(checks []model.CheckResult, name string) model.CheckResult {
+	for _, check := range checks {
+		if check.Name == name {
+			return check
+		}
+	}
+
+	return model.CheckResult{}
+}
+
+func allStarted(started map[string]bool) bool {
+	for _, ok := range started {
+		if !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+type mainFakeResolver struct{}
+
+type dkimDeadlineResolver struct {
+	mainFakeResolver
+}
+
+type concurrentStartResolver struct {
+	mainFakeResolver
+	started chan string
+	release chan struct{}
+}
+
+func newConcurrentStartResolver() *concurrentStartResolver {
+	return &concurrentStartResolver{
+		started: make(chan string, 4),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *concurrentStartResolver) waitForRelease(name string) {
+	select {
+	case r.started <- name:
+	default:
+	}
+	<-r.release
+}
+
+func (r *concurrentStartResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	if domain == "example.com" {
+		r.waitForRelease("mx")
+	}
+
+	return r.mainFakeResolver.LookupMX(ctx, domain)
+}
+
+func (r *concurrentStartResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	switch name {
+	case "example.com":
+		r.waitForRelease("spf")
+	case "_dmarc.example.com":
+		r.waitForRelease("dmarc")
+	case "google._domainkey.example.com":
+		r.waitForRelease("dkim")
+	}
+
+	return r.mainFakeResolver.LookupTXT(ctx, name)
+}
+
+func (dkimDeadlineResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	if name != "google._domainkey.example.com" {
+		return mainFakeResolver{}.LookupTXT(ctx, name)
+	}
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("missing deadline")
+	}
+	if time.Until(deadline) < 5*time.Second {
+		return nil, errors.New("deadline too short")
+	}
+
+	return []string{"v=DKIM1; p=abc123"}, nil
+}
+
+func (mainFakeResolver) LookupMX(_ context.Context, domain string) ([]*net.MX, error) {
+	if domain != "example.com" {
+		return nil, errors.New("not found")
+	}
+
+	return []*net.MX{{Host: "mx.example.com.", Pref: 10}}, nil
+}
+
+func (mainFakeResolver) LookupTXT(_ context.Context, name string) ([]string, error) {
+	switch name {
+	case "example.com":
+		return []string{"v=spf1 -all"}, nil
+	case "_dmarc.example.com":
+		return []string{"v=DMARC1; p=reject"}, nil
+	case "google._domainkey.example.com":
+		return []string{"v=DKIM1; p=abc123"}, nil
+	default:
+		return nil, errors.New("not found")
+	}
+}
+
+func (mainFakeResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	switch host {
+	case "mx.example.com.", "mail.example.com.":
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}}, nil
+	default:
+		return nil, errors.New("not found")
+	}
+}
+
+func (mainFakeResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
+	if addr == "192.0.2.10" {
+		return []string{"mail.example.com."}, nil
+	}
+
+	return nil, errors.New("not found")
+}
+
+func (mainFakeResolver) LookupNS(_ context.Context, name string) ([]*net.NS, error) {
+	if name == "example.com" {
+		return []*net.NS{{Host: "ns1.example.com."}}, nil
+	}
+
+	return nil, errors.New("not found")
+}
+
+func (mainFakeResolver) LookupSOA(_ context.Context, _ string) (*internaldns.SOA, error) {
+	return nil, internaldns.ErrUnsupported
+}
+
+func (mainFakeResolver) LookupDNSSEC(_ context.Context, _ string) (internaldns.DNSSECStatus, error) {
+	return internaldns.DNSSECStatus{Validated: false, Source: "test resolver"}, nil
+}
+
+func (mainFakeResolver) QueryMetrics() []internaldns.QueryMetric {
+	return []internaldns.QueryMetric{{Name: "example.com", Type: "MX", DurationMS: 12}}
 }

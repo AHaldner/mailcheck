@@ -23,12 +23,6 @@ func TestBuildSelectorsDeduplicatesExplicitSelectors(t *testing.T) {
 	}
 }
 
-func TestValidateDomainRejectsEmpty(t *testing.T) {
-	if err := ValidateDomain(""); err == nil {
-		t.Fatal("ValidateDomain() error = nil, want error")
-	}
-}
-
 func TestParseArgsAllowsDomainBeforeFlags(t *testing.T) {
 	got, err := ParseArgs([]string{"example.com", "--json", "--timeout", "5s"}, io.Discard)
 	if err != nil {
@@ -48,6 +42,17 @@ func TestParseArgsAllowsDomainBeforeFlags(t *testing.T) {
 	}
 }
 
+func TestParseArgsUsesLongerDefaultTimeout(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if got.Timeout.Seconds() != 30 {
+		t.Fatalf("Timeout = %v, want 30s", got.Timeout)
+	}
+}
+
 func TestParseArgsSupportsNoProgress(t *testing.T) {
 	got, err := ParseArgs([]string{"example.com", "--no-progress"}, io.Discard)
 	if err != nil {
@@ -56,6 +61,46 @@ func TestParseArgsSupportsNoProgress(t *testing.T) {
 
 	if !got.NoProgress {
 		t.Fatal("NoProgress = false, want true")
+	}
+}
+
+func TestParseArgsSupportsDeepDKIM(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com", "--dkim-deep"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.DeepDKIM {
+		t.Fatal("DeepDKIM = false, want true")
+	}
+}
+
+func TestParseArgsSupportsAdvanced(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com", "--advanced"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.Advanced {
+		t.Fatal("Advanced = false, want true")
+	}
+}
+
+func TestParseArgsSupportsDetailsAndVerbose(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com", "--details"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+	if !got.Details {
+		t.Fatal("Details = false, want true")
+	}
+
+	got, err = ParseArgs([]string{"example.com", "--verbose"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+	if !got.Details {
+		t.Fatal("Details = false for --verbose, want true")
 	}
 }
 

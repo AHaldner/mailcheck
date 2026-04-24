@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/AHaldner/mailcheck/internal/checks"
 	"github.com/AHaldner/mailcheck/internal/cli"
@@ -44,36 +45,19 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	defer cancel()
 
 	resolver := dns.NewNetResolver()
-	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor)
+	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor, checkCount(opts))
 
-	results := make([]model.CheckResult, 0, 4)
-	progress.Start("MX")
-	results = append(results, checks.CheckMX(ctx, resolver, opts.Domain))
-
-	progress.Start("SPF")
-	results = append(results, checks.CheckSPF(ctx, resolver, opts.Domain))
-
-	progress.Start("DMARC")
-	results = append(results, checks.CheckDMARC(ctx, resolver, opts.Domain))
-
-	progress.Start("DKIM")
-	dkimResult, selectorsTried, selectorsFound := checks.CheckDKIM(ctx, resolver, opts.Domain, opts.Selectors)
-	results = append(results, dkimResult)
-
-	runResult := model.RunResult{
-		Domain:             opts.Domain,
-		Checks:             results,
-		DKIMSelectorsTried: selectorsTried,
-		DKIMSelectorsFound: selectorsFound,
-	}
-	runResult.Rating = model.RatingFromChecks(runResult.Checks)
+	runResult := runChecks(ctx, resolver, opts, progress)
 	progress.Finish()
 
 	var output string
 	if opts.JSON {
 		output, err = report.RenderJSON(runResult)
 	} else {
-		output, err = report.RenderText(runResult, opts.NoColor)
+		output, err = report.RenderText(runResult, report.TextOptions{
+			NoColor: opts.NoColor,
+			Details: opts.Details,
+		})
 	}
 
 	if err != nil {
@@ -91,6 +75,148 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+type checkResolver interface {
+	dns.Resolver
+	dns.MetricsResolver
+}
+
+type progressStarter interface {
+	Start(name string)
+}
+
+func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, progress ...progressStarter) model.RunResult {
+	resolver = dns.NewCachedResolver(resolver)
+
+	start := func(name string) {
+		if len(progress) > 0 && progress[0] != nil {
+			progress[0].Start(name)
+		}
+	}
+
+	capacity := 4
+	if opts.Advanced {
+		capacity = 11
+	}
+
+	results := make([]model.CheckResult, capacity)
+	selectorsTried := []string(nil)
+	selectorsFound := []string(nil)
+
+	runBatch(start, []checkTask{
+		{
+			name: "MX",
+			run: func() model.CheckResult {
+				return checks.CheckMX(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "SPF",
+			run: func() model.CheckResult {
+				return checks.CheckSPF(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "DMARC",
+			run: func() model.CheckResult {
+				return checks.CheckDMARC(ctx, resolver, opts.Domain)
+			},
+		},
+		{
+			name: "DKIM",
+			run: func() model.CheckResult {
+				result, tried, found := checks.CheckDKIM(ctx, resolver, opts.Domain, checks.DKIMOptions{
+					Selectors: opts.Selectors,
+					Deep:      opts.DeepDKIM,
+				})
+				selectorsTried = tried
+				selectorsFound = found
+				return result
+			},
+		},
+	}, results)
+
+	if opts.Advanced {
+		runBatch(start, []checkTask{
+			{
+				name: "MX-A",
+				run: func() model.CheckResult {
+					return checks.CheckMXA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "MX-AAAA",
+				run: func() model.CheckResult {
+					return checks.CheckMXAAAA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "PTR",
+				run: func() model.CheckResult {
+					return checks.CheckPTR(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "NS",
+				run: func() model.CheckResult {
+					return checks.CheckNS(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "SOA",
+				run: func() model.CheckResult {
+					return checks.CheckSOA(ctx, resolver, opts.Domain)
+				},
+			},
+			{
+				name: "DNSSEC",
+				run: func() model.CheckResult {
+					return checks.CheckDNSSEC(ctx, resolver, opts.Domain)
+				},
+			},
+		}, results[4:])
+		start("DNS-TIME")
+		results[10] = checks.CheckDNSTime(resolver)
+	}
+
+	runResult := model.RunResult{
+		Domain:             opts.Domain,
+		Checks:             results,
+		DKIMSelectorsTried: selectorsTried,
+		DKIMSelectorsFound: selectorsFound,
+	}
+	runResult.Rating, runResult.RatingReason = model.RatingFromChecksWithReason(runResult.Checks)
+
+	return runResult
+}
+
+type checkTask struct {
+	name string
+	run  func() model.CheckResult
+}
+
+func runBatch(start func(string), tasks []checkTask, results []model.CheckResult) {
+	var wg sync.WaitGroup
+	for index, task := range tasks {
+		start(task.name)
+		wg.Add(1)
+
+		go func(index int, task checkTask) {
+			defer wg.Done()
+			results[index] = task.run()
+		}(index, task)
+	}
+
+	wg.Wait()
+}
+
+func checkCount(opts cli.Options) int {
+	if opts.Advanced {
+		return 11
+	}
+
+	return 4
 }
 
 func hasFail(checks []model.CheckResult) bool {

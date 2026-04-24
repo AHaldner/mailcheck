@@ -36,20 +36,7 @@ func CheckDMARC(ctx context.Context, r dns.Resolver, domain string) model.CheckR
 			Summary: missingRecordSummary("DMARC", domain),
 		}
 	case 1:
-		if !hasTag(records[0], "p") {
-			return model.CheckResult{
-				Name:    "DMARC",
-				Status:  model.StatusFail,
-				Summary: invalidRecordSummary("DMARC", domain, "missing p= policy"),
-				Details: recordDetails(records[:1]),
-			}
-		}
-
-		return model.CheckResult{
-			Name:    "DMARC",
-			Status:  model.StatusPass,
-			Summary: fmt.Sprintf("DMARC via %s [1 record]: %s", domain, records[0]),
-		}
+		return dmarcRecordResult(domain, records[0])
 	default:
 		return model.CheckResult{
 			Name:    "DMARC",
@@ -72,15 +59,11 @@ func checkInheritedDMARC(ctx context.Context, r dns.Resolver, domain string) *mo
 		case 0:
 			continue
 		case 1:
-			if !hasTag(records[0], "p") {
+			result := dmarcRecordResult(parent, records[0])
+			if result.Status == model.StatusFail {
 				continue
 			}
 
-			result := model.CheckResult{
-				Name:    "DMARC",
-				Status:  model.StatusPass,
-				Summary: fmt.Sprintf("DMARC via %s [1 record]: %s", parent, records[0]),
-			}
 			return &result
 		default:
 			result := model.CheckResult{
@@ -96,14 +79,47 @@ func checkInheritedDMARC(ctx context.Context, r dns.Resolver, domain string) *mo
 	return nil
 }
 
-func hasTag(record string, key string) bool {
-	for part := range strings.SplitSeq(record, ";") {
-		part = strings.TrimSpace(part)
-
-		if strings.HasPrefix(part, key+"=") {
-			return true
+func dmarcRecordResult(source string, record string) model.CheckResult {
+	tags := parseTagList(record)
+	policy, ok := tags["p"]
+	if !ok {
+		return model.CheckResult{
+			Name:    "DMARC",
+			Status:  model.StatusFail,
+			Summary: invalidRecordSummary("DMARC", source, "missing p= policy"),
+			Details: recordDetails([]string{record}),
 		}
 	}
 
-	return false
+	switch strings.ToLower(policy) {
+	case "none":
+		return model.CheckResult{
+			Name:       "DMARC",
+			Status:     model.StatusWarn,
+			Summary:    "Policy is monitoring only (p=none)",
+			Details:    []string{fmt.Sprintf("DMARC via %s: %s", source, record)},
+			Suggestion: "Switch to quarantine or reject after reviewing reports.",
+		}
+	case "quarantine":
+		return model.CheckResult{
+			Name:    "DMARC",
+			Status:  model.StatusPass,
+			Summary: "Policy quarantines failing mail",
+			Details: []string{fmt.Sprintf("DMARC via %s: %s", source, record)},
+		}
+	case "reject":
+		return model.CheckResult{
+			Name:    "DMARC",
+			Status:  model.StatusPass,
+			Summary: "Policy rejects failing mail",
+			Details: []string{fmt.Sprintf("DMARC via %s: %s", source, record)},
+		}
+	default:
+		return model.CheckResult{
+			Name:    "DMARC",
+			Status:  model.StatusFail,
+			Summary: invalidRecordSummary("DMARC", source, "invalid p= policy"),
+			Details: recordDetails([]string{record}),
+		}
+	}
 }

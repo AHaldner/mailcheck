@@ -202,7 +202,43 @@ var providerSelectors = []string{
 	"activecampaign",
 }
 
-func defaultDKIMSelectorCandidates(explicit []string) []string {
+var fastDKIMSelectors = []string{
+	"google",
+	"default",
+	"selector1",
+	"selector2",
+	"mail",
+	"dkim",
+	"s1",
+	"s2",
+	"k1",
+	"k2",
+	"k3",
+	"m1",
+	"mx",
+	"smtp",
+	"cm",
+	"20230601",
+	"mandrill",
+	"sendgrid",
+	"mailgun",
+	"mailchimp",
+	"postmark",
+	"sparkpost",
+	"mailjet",
+	"brevo",
+	"sendinblue",
+	"hubspot",
+	"klaviyo",
+	"amazonses",
+	"ses",
+	"resend",
+	"protonmail",
+	"zendesk1",
+	"zendesk2",
+}
+
+func dkimSelectorCandidates(explicit []string, deep bool) []string {
 	seen := make(map[string]struct{})
 	candidates := make([]string, 0, 192)
 
@@ -219,26 +255,34 @@ func defaultDKIMSelectorCandidates(explicit []string) []string {
 		candidates = append(candidates, selector)
 	}
 
-	for selector := range strings.FieldsSeq(curatedDKIMSelectors) {
-		add(selector)
-	}
-
-	for _, family := range selectorFamilies {
-		for value := family.start; value <= family.end; value++ {
-			if family.width > 0 {
-				add(fmt.Sprintf("%s%0*d", family.prefix, family.width, value))
-				continue
-			}
-
-			add(fmt.Sprintf("%s%d", family.prefix, value))
-		}
-	}
-
-	for _, selector := range providerSelectors {
-		add(selector)
-	}
-
 	for _, selector := range explicit {
+		add(selector)
+	}
+
+	if deep {
+		for selector := range strings.FieldsSeq(curatedDKIMSelectors) {
+			add(selector)
+		}
+
+		for _, family := range selectorFamilies {
+			for value := family.start; value <= family.end; value++ {
+				if family.width > 0 {
+					add(fmt.Sprintf("%s%0*d", family.prefix, family.width, value))
+					continue
+				}
+
+				add(fmt.Sprintf("%s%d", family.prefix, value))
+			}
+		}
+
+		for _, selector := range providerSelectors {
+			add(selector)
+		}
+
+		return candidates
+	}
+
+	for _, selector := range fastDKIMSelectors {
 		add(selector)
 	}
 

@@ -11,12 +11,17 @@ import (
 	"github.com/AHaldner/mailcheck/internal/help"
 )
 
+const DefaultTimeout = 30 * time.Second
+
 type Options struct {
 	Domain     string
 	Selectors  []string
 	JSON       bool
 	NoColor    bool
 	NoProgress bool
+	Advanced   bool
+	Details    bool
+	DeepDKIM   bool
 	Version    bool
 	Help       bool
 	Timeout    time.Duration
@@ -47,11 +52,15 @@ func ParseArgs(args []string, stderr io.Writer) (Options, error) {
 	fs.BoolVar(&opts.JSON, "json", false, "render machine-readable JSON")
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI color in text output")
 	fs.BoolVar(&opts.NoProgress, "no-progress", false, "disable interactive progress output")
+	fs.BoolVar(&opts.Advanced, "advanced", false, "include mail DNS diagnostic checks")
+	fs.BoolVar(&opts.Details, "details", false, "show raw DNS records and lookup details")
+	fs.BoolVar(&opts.Details, "verbose", false, "alias for --details")
+	fs.BoolVar(&opts.DeepDKIM, "dkim-deep", false, "try the extended DKIM selector list")
 	fs.BoolVar(&opts.Version, "version", false, "print version and exit")
 	fs.BoolVar(&opts.Version, "v", false, "print version and exit")
 	fs.BoolVar(&opts.Help, "help", false, "print help message and exit")
 	fs.BoolVar(&opts.Help, "h", false, "print help message and exit")
-	fs.DurationVar(&opts.Timeout, "timeout", 3*time.Second, "total DNS lookup timeout")
+	fs.DurationVar(&opts.Timeout, "timeout", DefaultTimeout, "total DNS lookup timeout")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, help.GetHelp())
 		fmt.Fprintln(stderr)
@@ -114,6 +123,10 @@ func normalizeArgs(args []string) ([]string, error) {
 			arg == "--json",
 			arg == "--no-color",
 			arg == "--no-progress",
+			arg == "--advanced",
+			arg == "--details",
+			arg == "--verbose",
+			arg == "--dkim-deep",
 			arg == "--help",
 			arg == "--version":
 			normalized = append(normalized, arg)
@@ -160,52 +173,4 @@ func BuildSelectors(explicit []string) []string {
 	}
 
 	return selectors
-}
-
-func ValidateDomain(domain string) error {
-	domain = strings.TrimSpace(domain)
-	if domain == "" {
-		return errors.New("domain must not be empty")
-	}
-
-	if len(domain) > 253 {
-		return errors.New("domain exceeds maximum length")
-	}
-
-	if strings.Contains(domain, "://") || strings.Contains(domain, "/") || strings.Contains(domain, " ") {
-		return errors.New("domain must be a bare hostname")
-	}
-
-	if before, ok := strings.CutSuffix(domain, "."); ok {
-		domain = before
-	}
-
-	if !strings.Contains(domain, ".") {
-		return errors.New("domain must contain at least one dot")
-	}
-
-	labels := strings.SplitSeq(domain, ".")
-	for label := range labels {
-		if label == "" {
-			return errors.New("domain contains an empty label")
-		}
-
-		if len(label) > 63 {
-			return fmt.Errorf("domain label %q exceeds maximum length", label)
-		}
-
-		if label[0] == '-' || label[len(label)-1] == '-' {
-			return fmt.Errorf("domain label %q must not start or end with '-'", label)
-		}
-
-		for _, r := range label {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
-				continue
-			}
-
-			return fmt.Errorf("domain label %q contains invalid character %q", label, r)
-		}
-	}
-
-	return nil
 }

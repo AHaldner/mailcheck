@@ -2,7 +2,7 @@ package help
 
 import "strings"
 
-const usageLine = "Usage: mailcheck [--version] | [--help] | [--selector name] [--json] [--no-color] [--no-progress] [--timeout 3s] domain.example"
+const usageLine = "Usage: mailcheck [--version] | [--help] | [--selector name] [--advanced] [--details] [--dkim-deep] [--json] [--no-color] [--no-progress] [--timeout 30s] domain.example"
 
 func UsageLine() string {
 	return usageLine
@@ -17,7 +17,11 @@ func GetHelp() string {
 		"  --json              render machine-readable JSON",
 		"  --no-color          disable ANSI color in text output",
 		"  --no-progress       disable interactive progress output",
-		"  --timeout <value>   total DNS lookup timeout (default 3s)",
+		"  --advanced          include mail DNS diagnostic checks",
+		"  --details           show raw DNS records and lookup details",
+		"  --verbose           alias for --details",
+		"  --dkim-deep         try the extended DKIM selector list",
+		"  --timeout <value>   total DNS lookup timeout (default 30s)",
 		"  --version, -v       print version and exit",
 		"  --help, -h          print help message and exit",
 	}
