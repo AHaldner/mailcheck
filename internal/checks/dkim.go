@@ -87,44 +87,45 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 	defer cancel()
 
 	results := make(chan dkimLookupResult, len(selectors))
-	sem := make(chan struct{}, min(dkimConcurrentLookups, len(selectors)))
+	jobs := make(chan dkimLookupResult, len(selectors))
+	for index, selector := range selectors {
+		jobs <- dkimLookupResult{index: index, selector: selector}
+	}
+	close(jobs)
 
 	var wg sync.WaitGroup
-	for index, selector := range selectors {
+	for range min(dkimConcurrentLookups, len(selectors)) {
 		wg.Add(1)
-
-		go func(index int, selector string) {
+		go func() {
 			defer wg.Done()
-
-			select {
-			case sem <- struct{}{}:
-			case <-lookupCtx.Done():
-				results <- dkimLookupResult{index: index, selector: selector, err: lookupCtx.Err()}
-				return
-			}
-			defer func() {
-				<-sem
-			}()
-
-			fqdn := selector + "._domainkey." + domain
-			txts, err := r.LookupTXT(lookupCtx, fqdn)
-			if err != nil {
-				results <- dkimLookupResult{
-					index:    index,
-					selector: selector,
-					fqdn:     fqdn,
-					err:      err,
+			for job := range jobs {
+				select {
+				case <-lookupCtx.Done():
+					results <- dkimLookupResult{index: job.index, selector: job.selector, err: lookupCtx.Err()}
+					continue
+				default:
 				}
-				return
-			}
 
-			results <- dkimLookupResult{
-				index:    index,
-				selector: selector,
-				fqdn:     fqdn,
-				records:  matchingDKIMRecords(txts),
+				fqdn := job.selector + "._domainkey." + domain
+				txts, err := r.LookupTXT(lookupCtx, fqdn)
+				if err != nil {
+					results <- dkimLookupResult{
+						index:    job.index,
+						selector: job.selector,
+						fqdn:     fqdn,
+						err:      err,
+					}
+					continue
+				}
+
+				results <- dkimLookupResult{
+					index:    job.index,
+					selector: job.selector,
+					fqdn:     fqdn,
+					records:  matchingDKIMRecords(txts),
+				}
 			}
-		}(index, selector)
+		}()
 	}
 
 	go func() {

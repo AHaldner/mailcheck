@@ -32,7 +32,7 @@ iwr https://raw.githubusercontent.com/AHaldner/mailcheck/main/scripts/install.ps
 
 Tagged releases are built automatically with GitHub Actions and GoReleaser. The installers verify the downloaded archive against the release `checksums.txt` before installing.
 
-See [CHANGELOG.md](/Users/andrinhaldner/Documents/Dev/OpenSource/mailcheck/CHANGELOG.md) for versioned release notes.
+See [CHANGELOG.md](./CHANGELOG.md) for versioned release notes.
 
 ## Usage
 

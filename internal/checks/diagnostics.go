@@ -38,6 +38,14 @@ func checkMXAddressFamily(ctx context.Context, r dns.Resolver, domain string, na
 			Summary: missingRecordSummary(name, domain),
 		}
 	}
+	if hasNullMX(mxs) {
+		return model.CheckResult{
+			Name:    name,
+			Status:  model.StatusInfo,
+			Summary: "Not checked: domain publishes a null MX and does not accept mail",
+			Details: []string{fmt.Sprintf("MX via %s: 0 .", domain)},
+		}
+	}
 
 	sortMX(mxs)
 	matches := make([]string, 0)
@@ -98,6 +106,14 @@ func CheckPTR(ctx context.Context, r dns.Resolver, domain string) model.CheckRes
 			Name:    "PTR",
 			Status:  model.StatusWarn,
 			Summary: "PTR via " + domain + " [0 MX targets]: no reverse DNS checked",
+		}
+	}
+	if hasNullMX(mxs) {
+		return model.CheckResult{
+			Name:    "PTR",
+			Status:  model.StatusInfo,
+			Summary: "Not checked: domain publishes a null MX and does not accept mail",
+			Details: []string{fmt.Sprintf("MX via %s: 0 .", domain)},
 		}
 	}
 

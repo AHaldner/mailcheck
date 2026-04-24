@@ -52,7 +52,19 @@ func mxResult(ctx context.Context, r dns.Resolver, source string, records []*net
 
 	for _, record := range records {
 		parts = append(parts, fmt.Sprintf("%d %s", record.Pref, record.Host))
+	}
+	details = append(details, fmt.Sprintf("MX via %s: %s", source, strings.Join(parts, ", ")))
 
+	if hasNullMX(records) {
+		return model.CheckResult{
+			Name:    "MX",
+			Status:  model.StatusFail,
+			Summary: "Domain publishes a null MX and does not accept mail",
+			Details: details,
+		}
+	}
+
+	for _, record := range records {
 		ips, err := r.LookupIPAddr(ctx, record.Host)
 		if err != nil || len(ips) == 0 {
 			if err != nil {
@@ -66,7 +78,6 @@ func mxResult(ctx context.Context, r dns.Resolver, source string, records []*net
 		resolvedTargets++
 		details = append(details, fmt.Sprintf("%s A/AAAA: %s", record.Host, joinIPAddrs(ips)))
 	}
-	details = append([]string{fmt.Sprintf("MX via %s: %s", source, strings.Join(parts, ", "))}, details...)
 
 	if resolvedTargets == 0 {
 		return model.CheckResult{
@@ -110,6 +121,10 @@ func checkHelperMX(ctx context.Context, r dns.Resolver, host string) *model.Chec
 
 	result := mxResult(ctx, r, host, records)
 	return &result
+}
+
+func hasNullMX(records []*net.MX) bool {
+	return len(records) == 1 && strings.TrimSuffix(records[0].Host, ".") == ""
 }
 
 func sortMX(records []*net.MX) {

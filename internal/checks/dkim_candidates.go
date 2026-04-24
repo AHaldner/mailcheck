@@ -218,6 +218,7 @@ var fastDKIMSelectors = []string{
 	"mx",
 	"smtp",
 	"cm",
+	"20230601",
 	"mandrill",
 	"sendgrid",
 	"mailgun",

@@ -253,6 +253,23 @@ func TestCheckMXFailsWhenTargetsDoNotResolve(t *testing.T) {
 	}
 }
 
+func TestCheckMXReportsNullMXAsNoMailAccepted(t *testing.T) {
+	r := fakeResolver{
+		mx: map[string][]*net.MX{
+			"example.com": {{Host: ".", Pref: 0}},
+		},
+	}
+
+	got := CheckMX(context.Background(), r, "example.com")
+	if got.Status != model.StatusFail {
+		t.Fatalf("status = %s, want FAIL", got.Status)
+	}
+
+	if got.Summary != "Domain publishes a null MX and does not accept mail" {
+		t.Fatalf("summary = %q, want null MX summary", got.Summary)
+	}
+}
+
 func TestCheckMXPassesWhenAtLeastOneTargetResolves(t *testing.T) {
 	r := fakeResolver{
 		mx: map[string][]*net.MX{
@@ -305,6 +322,23 @@ func TestCheckMXAPassesWhenAnyMXTargetHasIPv4(t *testing.T) {
 	}
 	if !containsSubstring(got.Details, "192.0.2.10") {
 		t.Fatalf("details = %v, want IPv4 address", got.Details)
+	}
+}
+
+func TestCheckMXAReportsNullMXAsNotApplicable(t *testing.T) {
+	r := fakeResolver{
+		mx: map[string][]*net.MX{
+			"example.com": {{Host: ".", Pref: 0}},
+		},
+	}
+
+	got := CheckMXA(context.Background(), r, "example.com")
+	if got.Status != model.StatusInfo {
+		t.Fatalf("status = %s, want INFO", got.Status)
+	}
+
+	if got.Summary != "Not checked: domain publishes a null MX and does not accept mail" {
+		t.Fatalf("summary = %q, want null MX diagnostic summary", got.Summary)
 	}
 }
 
@@ -404,6 +438,14 @@ func TestDKIMDefaultCandidatesStayBoundedAndIncludeExplicitSelectors(t *testing.
 		if !containsString(got, selector) {
 			t.Fatalf("candidates missing %q: %v", selector, got)
 		}
+	}
+}
+
+func TestDKIMDefaultCandidatesIncludeCurrentGmailSelector(t *testing.T) {
+	got := dkimSelectorCandidates(nil, false)
+
+	if !containsString(got, "20230601") {
+		t.Fatalf("default candidates missing current Gmail selector 20230601: %v", got)
 	}
 }
 
