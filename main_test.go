@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/AHaldner/mailcheck/internal/cli"
+	internaldns "github.com/AHaldner/mailcheck/internal/dns"
 	"github.com/AHaldner/mailcheck/internal/help"
+	"github.com/AHaldner/mailcheck/internal/model"
 	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
 
@@ -153,7 +160,7 @@ func TestRunDoesNotEmitProgressToNonTTYStderr(t *testing.T) {
 		t.Fatalf("ReadFile(stderr) error = %v", err)
 	}
 
-	if strings.Contains(string(stderrData), "Checking MX") {
+	if strings.Contains(string(stderrData), "MX") {
 		t.Fatalf("stderr contained progress output:\n%s", string(stderrData))
 	}
 }
@@ -178,7 +185,96 @@ func TestRunJSONDoesNotEmitProgress(t *testing.T) {
 		t.Fatalf("ReadFile(stderr) error = %v", err)
 	}
 
-	if strings.Contains(string(stderrData), "Checking ") {
+	if strings.Contains(string(stderrData), "[") {
 		t.Fatalf("stderr contained progress output in json mode:\n%s", string(stderrData))
 	}
+}
+
+func TestRunChecksDefaultsToCoreChecks(t *testing.T) {
+	result := runChecks(context.Background(), mainFakeResolver{}, cli.Options{Domain: "example.com"})
+	got := checkNames(result.Checks)
+	want := []string{"MX", "SPF", "DMARC", "DKIM"}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("check names = %v, want %v", got, want)
+	}
+}
+
+func TestRunChecksAdvancedIncludesDiagnostics(t *testing.T) {
+	result := runChecks(context.Background(), mainFakeResolver{}, cli.Options{Domain: "example.com", Advanced: true})
+	got := checkNames(result.Checks)
+	want := []string{"MX", "SPF", "DMARC", "DKIM", "MX-A", "MX-AAAA", "PTR", "NS", "SOA", "DNSSEC", "DNS-TIME"}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("check names = %v, want %v", got, want)
+	}
+}
+
+func checkNames(checks []model.CheckResult) []string {
+	names := make([]string, 0, len(checks))
+	for _, check := range checks {
+		names = append(names, check.Name)
+	}
+
+	return names
+}
+
+type mainFakeResolver struct{}
+
+func (mainFakeResolver) LookupMX(_ context.Context, domain string) ([]*net.MX, error) {
+	if domain != "example.com" {
+		return nil, errors.New("not found")
+	}
+
+	return []*net.MX{{Host: "mx.example.com.", Pref: 10}}, nil
+}
+
+func (mainFakeResolver) LookupTXT(_ context.Context, name string) ([]string, error) {
+	switch name {
+	case "example.com":
+		return []string{"v=spf1 -all"}, nil
+	case "_dmarc.example.com":
+		return []string{"v=DMARC1; p=reject"}, nil
+	case "google._domainkey.example.com":
+		return []string{"v=DKIM1; p=abc123"}, nil
+	default:
+		return nil, errors.New("not found")
+	}
+}
+
+func (mainFakeResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	switch host {
+	case "mx.example.com.", "mail.example.com.":
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}}, nil
+	default:
+		return nil, errors.New("not found")
+	}
+}
+
+func (mainFakeResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
+	if addr == "192.0.2.10" {
+		return []string{"mail.example.com."}, nil
+	}
+
+	return nil, errors.New("not found")
+}
+
+func (mainFakeResolver) LookupNS(_ context.Context, name string) ([]*net.NS, error) {
+	if name == "example.com" {
+		return []*net.NS{{Host: "ns1.example.com."}}, nil
+	}
+
+	return nil, errors.New("not found")
+}
+
+func (mainFakeResolver) LookupSOA(_ context.Context, _ string) (*internaldns.SOA, error) {
+	return nil, internaldns.ErrUnsupported
+}
+
+func (mainFakeResolver) LookupDNSSEC(_ context.Context, _ string) (internaldns.DNSSECStatus, error) {
+	return internaldns.DNSSECStatus{Validated: false, Source: "test resolver"}, nil
+}
+
+func (mainFakeResolver) QueryMetrics() []internaldns.QueryMetric {
+	return []internaldns.QueryMetric{{Name: "example.com", Type: "MX", DurationMS: 12}}
 }

@@ -7,17 +7,87 @@ import (
 	"github.com/AHaldner/mailcheck/internal/model"
 )
 
-func RenderText(result model.RunResult, noColor bool) (string, error) {
+type TextOptions struct {
+	NoColor bool
+	Details bool
+}
+
+func RenderText(result model.RunResult, opts TextOptions) (string, error) {
 	var builder strings.Builder
 
-	fmt.Fprintf(&builder, "Mailcheck: %s\n", result.Domain)
+	renderReportTitle(&builder, opts.NoColor)
+	fmt.Fprintf(&builder, "Domain: %s\n", result.Domain)
 	rating := result.Rating
-	if !noColor {
+	if !opts.NoColor {
 		rating = colorizeRating(result.Rating)
 	}
-	fmt.Fprintf(&builder, "Rating: %s\n\n", rating)
+	fmt.Fprintf(&builder, "Rating: %s\n", rating)
+	if result.RatingReason != "" {
+		fmt.Fprintf(&builder, "Reason: %s\n", result.RatingReason)
+	}
+	fmt.Fprintln(&builder)
 
-	for _, check := range result.Checks {
+	core, advanced := splitChecks(result.Checks)
+	renderCheckSection(&builder, "Core mail checks", core, opts.NoColor)
+	if len(advanced) > 0 {
+		fmt.Fprintln(&builder)
+		renderCheckSection(&builder, "Advanced DNS", advanced, opts.NoColor)
+	}
+
+	renderActions(&builder, result.Checks, opts.NoColor)
+	if opts.Details {
+		renderDetails(&builder, result.Checks)
+	}
+
+	return builder.String(), nil
+}
+
+func splitChecks(checks []model.CheckResult) ([]model.CheckResult, []model.CheckResult) {
+	core := make([]model.CheckResult, 0, len(checks))
+	advanced := make([]model.CheckResult, 0)
+
+	for _, check := range checks {
+		switch check.Name {
+		case "MX", "SPF", "DMARC", "DKIM":
+			core = append(core, check)
+		default:
+			advanced = append(advanced, check)
+		}
+	}
+
+	return core, advanced
+}
+
+func renderReportTitle(builder *strings.Builder, noColor bool) {
+	const title = "Mailcheck Results"
+	const horizontalPadding = 4
+	padding := strings.Repeat(" ", horizontalPadding)
+	width := len(title) + horizontalPadding*2
+	lines := []string{
+		"┌" + strings.Repeat("─", width) + "┐",
+		"│" + padding + title + padding + "│",
+		"└" + strings.Repeat("─", width) + "┘",
+	}
+
+	for _, line := range lines {
+		if noColor {
+			fmt.Fprintln(builder, line)
+			continue
+		}
+
+		fmt.Fprintf(builder, "\x1b[1;36m%s\x1b[0m\n", line)
+	}
+	fmt.Fprintln(builder)
+}
+
+func renderCheckSection(builder *strings.Builder, title string, checks []model.CheckResult, noColor bool) {
+	if len(checks) == 0 {
+		return
+	}
+
+	renderSectionTitle(builder, title, noColor)
+	nameWidth := checkNameWidth(checks)
+	for _, check := range checks {
 		status := string(check.Status)
 		summary := check.Summary
 		if !noColor {
@@ -25,18 +95,80 @@ func RenderText(result model.RunResult, noColor bool) (string, error) {
 			summary = colorizeBracketMeta(summary)
 		}
 
-		fmt.Fprintf(&builder, "%-7s %-5s %s\n", check.Name, status, summary)
+		fmt.Fprintf(builder, "%-*s %-5s %s\n", nameWidth, check.Name, status, summary)
 	}
+}
 
-	for _, check := range result.Checks {
+func renderActions(builder *strings.Builder, checks []model.CheckResult, noColor bool) {
+	actions := make([]model.CheckResult, 0)
+	for _, check := range checks {
 		if check.Suggestion == "" {
 			continue
 		}
-
-		fmt.Fprintf(&builder, "\nSuggestion: %s\n", check.Suggestion)
+		actions = append(actions, check)
+	}
+	if len(actions) == 0 {
+		return
 	}
 
-	return builder.String(), nil
+	fmt.Fprintln(builder)
+	renderSectionTitle(builder, "Actions", noColor)
+	nameWidth := checkNameWidth(actions)
+	for _, check := range actions {
+		fmt.Fprintf(builder, "%-*s  %s\n", nameWidth, check.Name, check.Suggestion)
+	}
+}
+
+func renderDetails(builder *strings.Builder, checks []model.CheckResult) {
+	hasDetails := false
+	for _, check := range checks {
+		if len(check.Details) > 0 {
+			hasDetails = true
+			break
+		}
+	}
+	if !hasDetails {
+		return
+	}
+
+	fmt.Fprintln(builder)
+	renderDetailsTitle(builder)
+	for _, check := range checks {
+		if len(check.Details) == 0 {
+			continue
+		}
+
+		fmt.Fprintf(builder, "%s\n", check.Name)
+		for _, detail := range check.Details {
+			fmt.Fprintf(builder, "  %s\n", detail)
+		}
+	}
+}
+
+func renderSectionTitle(builder *strings.Builder, title string, noColor bool) {
+	line := fmt.Sprintf("== %s ==", title)
+	if !noColor {
+		line = "\x1b[1m" + line + "\x1b[0m"
+	}
+
+	fmt.Fprintln(builder, line)
+}
+
+func renderDetailsTitle(builder *strings.Builder) {
+	fmt.Fprintln(builder, "---- Technical details --------------------------------------------------")
+	fmt.Fprintln(builder, "Raw DNS records and lookup details")
+	fmt.Fprintln(builder)
+}
+
+func checkNameWidth(checks []model.CheckResult) int {
+	width := 2
+	for _, check := range checks {
+		if len(check.Name) > width {
+			width = len(check.Name)
+		}
+	}
+
+	return width
 }
 
 func colorizeBracketMeta(value string) string {
@@ -75,6 +207,8 @@ func colorize(status model.Status, value string) string {
 		return "\x1b[33m" + value + "\x1b[0m"
 	case model.StatusFail:
 		return "\x1b[31m" + value + "\x1b[0m"
+	case model.StatusInfo:
+		return "\x1b[36m" + value + "\x1b[0m"
 	default:
 		return value
 	}

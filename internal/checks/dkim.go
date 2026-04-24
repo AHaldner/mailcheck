@@ -12,6 +12,11 @@ import (
 
 const dkimConcurrentLookups = 24
 
+type DKIMOptions struct {
+	Selectors []string
+	Deep      bool
+}
+
 type dkimLookupResult struct {
 	index    int
 	selector string
@@ -20,8 +25,8 @@ type dkimLookupResult struct {
 	err      error
 }
 
-func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []string) (model.CheckResult, []string, []string) {
-	tried := defaultDKIMSelectorCandidates(selectors)
+func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, opts DKIMOptions) (model.CheckResult, []string, []string) {
+	tried := dkimSelectorCandidates(opts.Selectors, opts.Deep)
 	results := lookupDKIMSelectors(ctx, r, domain, tried)
 
 	found := make([]dkimLookupResult, 0)
@@ -51,7 +56,7 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 		return model.CheckResult{
 			Name:    "DKIM",
 			Status:  model.StatusPass,
-			Summary: dkimFoundSummary(domain, foundSelectors),
+			Summary: "DKIM records found for common selectors",
 			Details: details,
 		}, tried, foundSelectors
 	}
@@ -62,11 +67,19 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, selectors []s
 
 	return model.CheckResult{
 		Name:       "DKIM",
-		Status:     model.StatusFail,
-		Summary:    fmt.Sprintf("DKIM via %s [%d selectors tried]: no matching record found", domain, len(tried)),
+		Status:     model.StatusWarn,
+		Summary:    "DKIM records were not found for guessed selectors",
 		Details:    lookupErrors,
-		Suggestion: "Try --selector <name> or use a selector from a real DKIM-Signature header.",
+		Suggestion: dkimSuggestion(opts.Deep),
 	}, tried, nil
+}
+
+func dkimSuggestion(deep bool) string {
+	if deep {
+		return "Try --selector <name> or use a selector from a real DKIM-Signature header."
+	}
+
+	return "Try --selector <name>, --dkim-deep, or use a selector from a real DKIM-Signature header."
 }
 
 func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, selectors []string) []dkimLookupResult {

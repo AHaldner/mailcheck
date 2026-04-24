@@ -44,36 +44,19 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	defer cancel()
 
 	resolver := dns.NewNetResolver()
-	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor)
+	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor, checkCount(opts))
 
-	results := make([]model.CheckResult, 0, 4)
-	progress.Start("MX")
-	results = append(results, checks.CheckMX(ctx, resolver, opts.Domain))
-
-	progress.Start("SPF")
-	results = append(results, checks.CheckSPF(ctx, resolver, opts.Domain))
-
-	progress.Start("DMARC")
-	results = append(results, checks.CheckDMARC(ctx, resolver, opts.Domain))
-
-	progress.Start("DKIM")
-	dkimResult, selectorsTried, selectorsFound := checks.CheckDKIM(ctx, resolver, opts.Domain, opts.Selectors)
-	results = append(results, dkimResult)
-
-	runResult := model.RunResult{
-		Domain:             opts.Domain,
-		Checks:             results,
-		DKIMSelectorsTried: selectorsTried,
-		DKIMSelectorsFound: selectorsFound,
-	}
-	runResult.Rating = model.RatingFromChecks(runResult.Checks)
+	runResult := runChecks(ctx, resolver, opts, progress)
 	progress.Finish()
 
 	var output string
 	if opts.JSON {
 		output, err = report.RenderJSON(runResult)
 	} else {
-		output, err = report.RenderText(runResult, opts.NoColor)
+		output, err = report.RenderText(runResult, report.TextOptions{
+			NoColor: opts.NoColor,
+			Details: opts.Details,
+		})
 	}
 
 	if err != nil {
@@ -91,6 +74,88 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+type checkResolver interface {
+	dns.Resolver
+	dns.MetricsResolver
+}
+
+type progressStarter interface {
+	Start(name string)
+}
+
+func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, progress ...progressStarter) model.RunResult {
+	start := func(name string) {
+		if len(progress) > 0 && progress[0] != nil {
+			progress[0].Start(name)
+		}
+	}
+
+	capacity := 4
+	if opts.Advanced {
+		capacity = 11
+	}
+
+	results := make([]model.CheckResult, 0, capacity)
+	start("MX")
+	results = append(results, checks.CheckMX(ctx, resolver, opts.Domain))
+
+	start("SPF")
+	results = append(results, checks.CheckSPF(ctx, resolver, opts.Domain))
+
+	start("DMARC")
+	results = append(results, checks.CheckDMARC(ctx, resolver, opts.Domain))
+
+	start("DKIM")
+	dkimCtx, dkimCancel := context.WithTimeout(ctx, cli.DefaultDKIMTimeout)
+	dkimResult, selectorsTried, selectorsFound := checks.CheckDKIM(dkimCtx, resolver, opts.Domain, checks.DKIMOptions{
+		Selectors: opts.Selectors,
+		Deep:      opts.DeepDKIM,
+	})
+	dkimCancel()
+	results = append(results, dkimResult)
+
+	if opts.Advanced {
+		start("MX-A")
+		results = append(results, checks.CheckMXA(ctx, resolver, opts.Domain))
+
+		start("MX-AAAA")
+		results = append(results, checks.CheckMXAAAA(ctx, resolver, opts.Domain))
+
+		start("PTR")
+		results = append(results, checks.CheckPTR(ctx, resolver, opts.Domain))
+
+		start("NS")
+		results = append(results, checks.CheckNS(ctx, resolver, opts.Domain))
+
+		start("SOA")
+		results = append(results, checks.CheckSOA(ctx, resolver, opts.Domain))
+
+		start("DNSSEC")
+		results = append(results, checks.CheckDNSSEC(ctx, resolver, opts.Domain))
+
+		start("DNS-TIME")
+		results = append(results, checks.CheckDNSTime(resolver))
+	}
+
+	runResult := model.RunResult{
+		Domain:             opts.Domain,
+		Checks:             results,
+		DKIMSelectorsTried: selectorsTried,
+		DKIMSelectorsFound: selectorsFound,
+	}
+	runResult.Rating, runResult.RatingReason = model.RatingFromChecksWithReason(runResult.Checks)
+
+	return runResult
+}
+
+func checkCount(opts cli.Options) int {
+	if opts.Advanced {
+		return 11
+	}
+
+	return 4
 }
 
 func hasFail(checks []model.CheckResult) bool {
