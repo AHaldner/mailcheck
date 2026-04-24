@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.2.0 - 2026-04-24
+
+### Features
+- implement caching and goroutines
+- implement better DNS resolver and more detailed flags
+
+### Fixes
+- handle null MX records and update DKIM selector candidates
+
+### Docs
+- update changelog for v1.1.2
+
+### Other
+- Merge pull request #1 from AHaldner/codex-mail-reliability-diagnostics
+
 ## v1.1.2 - 2026-04-22
 
 ### Features
