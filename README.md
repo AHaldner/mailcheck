@@ -40,6 +40,8 @@ See [CHANGELOG.md](./CHANGELOG.md) for versioned release notes.
 mailcheck example.com
 mailcheck --advanced example.com
 mailcheck --advanced --details example.com
+mailcheck example.com --selector mail --details
+mailcheck example.com --no-cache
 mailcheck -h
 mailcheck --help
 mailcheck -v
@@ -66,6 +68,7 @@ go test ./...
 | `--advanced` | Include mail DNS diagnostic checks |
 | `--dkim-deep` | Try the extended DKIM selector list |
 | `--json` | Output JSON |
+| `--no-cache` | Disable DNS lookup caching for the run |
 | `--no-color` | Disable ANSI colors |
 | `--no-progress` | Disable the live progress line in interactive text mode |
 | `--details`, `--verbose` | Show raw DNS records and lookup details in text output |
@@ -75,11 +78,14 @@ go test ./...
 
 ## Notes
 
+- DMARC `p=none` is reported as a pass when a valid DMARC record exists, with a suggestion to move to `quarantine` or `reject` after reviewing reports.
 - DKIM uses a bounded common selector library plus any selectors passed with `--selector`.
+- Selectors passed with `--selector` are checked first. If none of the given selectors are found but a common selector is found, DKIM is reported as a warning so the requested selector mismatch is visible.
 - `--dkim-deep` opts into the extended selector sweep. This is slower and can make DNS resolvers rate-limit or time out.
 - A missing guessed DKIM selector is reported as a warning because DKIM cannot be proven absent without a selector from a real `DKIM-Signature` header.
 - Common ESP-style subdomain setups are handled, including cases where helper records live on `send.<domain>` or DMARC is inherited from the parent domain.
-- A DKIM pass reports the selectors found.
+- DKIM summaries distinguish records found for given selectors, common selectors, or a given selector that is also in the common list.
+- `--no-cache` is useful when verifying DNS changes because every lookup goes to the resolver instead of the in-process cache.
 - Text output is optimized for readability. Use `--details` or `--verbose` to show raw DNS records and per-lookup details.
 - `--advanced` adds a separate `Advanced DNS` section with `MX-A`, `MX-AAAA`, `PTR`, `NS`, `SOA`, `DNSSEC`, and `DNS-TIME` diagnostics.
 - MX targets are checked for usable `A` or `AAAA` addresses as part of the core `MX` check. In advanced mode, separate `MX-A` and `MX-AAAA` diagnostics show IPv4 and IPv6 availability.
