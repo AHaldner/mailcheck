@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.3.0 - 2026-05-04
+
+### Features
+- improve DKIM selector handling and reporting
+- add --no-cache flag to disable DNS lookup caching
+
+### Fixes
+- update DMARC and DKIM test expectations and logic
+
+### Refactors
+- rework help formatting to use flag metadata structs
+
+### Docs
+- document --no-cache flag and update usage examples
+- update changelog for v1.2.0
+
+### Other
+- Merge pull request #2 from AHaldner/fixes
+
 ## v1.2.0 - 2026-04-24
 
 ### Features
