@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"io"
 	"strings"
 	"testing"
@@ -61,6 +62,73 @@ func TestParseArgsSupportsNoProgress(t *testing.T) {
 
 	if !got.NoProgress {
 		t.Fatal("NoProgress = false, want true")
+	}
+}
+
+func TestParseArgsSupportsNoCache(t *testing.T) {
+	got, err := ParseArgs([]string{"example.com", "--no-cache"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+
+	if !got.NoCache {
+		t.Fatal("NoCache = false, want true")
+	}
+}
+
+func TestRegisterFlagDefinitionsUsesDeclarativeBoolTarget(t *testing.T) {
+	definitions := []flagDefinition{
+		{
+			help:        help.Flag{Names: []string{"json"}, Usage: "render machine-readable JSON", UsageMode: help.UsageOption},
+			valueKind:   boolFlag,
+			optionField: "JSON",
+		},
+	}
+	var opts Options
+	var selectors selectorFlags
+	fs := flag.NewFlagSet("mailcheck", flag.ContinueOnError)
+
+	registerFlagDefinitions(fs, &opts, &selectors, definitions)
+
+	if err := fs.Parse([]string{"--json"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !opts.JSON {
+		t.Fatal("JSON = false, want true")
+	}
+}
+
+func TestRegisterFlagDefinitionsUsesProvidedDefinitionsOnly(t *testing.T) {
+	var opts Options
+	var selectors selectorFlags
+	fs := flag.NewFlagSet("mailcheck", flag.ContinueOnError)
+
+	registerFlagDefinitions(fs, &opts, &selectors, nil)
+
+	if err := fs.Parse([]string{"--json"}); err == nil {
+		t.Fatal("Parse() error = nil, want unknown flag error")
+	}
+}
+
+func TestHelpMatchesCurrentOutput(t *testing.T) {
+	want := `Usage: mailcheck [--version] | [--help] | [--selector name] [--advanced] [--details] [--dkim-deep] [--json] [--no-cache] [--no-color] [--no-progress] [--timeout 30s] domain.example
+
+Flags:
+  --selector <name>   additional DKIM selector to try
+  --json              render machine-readable JSON
+  --no-cache          disable DNS lookup caching for the run
+  --no-color          disable ANSI color in text output
+  --no-progress       disable interactive progress output
+  --advanced          include mail DNS diagnostic checks
+  --details           show raw DNS records and lookup details
+  --verbose           alias for --details
+  --dkim-deep         try the extended DKIM selector list
+  --timeout <value>   total DNS lookup timeout (default 30s)
+  --version, -v       print version and exit
+  --help, -h          print help message and exit`
+
+	if Help() != want {
+		t.Fatalf("Help() = %q, want %q", Help(), want)
 	}
 }
 
@@ -171,7 +239,7 @@ func TestParseArgsRejectsHelpWithDomainPrintsConsistentUsage(t *testing.T) {
 		t.Fatalf("ParseArgs() error = %q, want %q", err.Error(), "--help does not accept a domain argument")
 	}
 
-	if strings.TrimSpace(stderr.String()) != help.GetHelp() {
-		t.Fatalf("stderr = %q, want %q", strings.TrimSpace(stderr.String()), help.GetHelp())
+	if strings.TrimSpace(stderr.String()) != Help() {
+		t.Fatalf("stderr = %q, want %q", strings.TrimSpace(stderr.String()), Help())
 	}
 }

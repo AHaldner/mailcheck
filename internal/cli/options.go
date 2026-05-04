@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ type Options struct {
 	JSON       bool
 	NoColor    bool
 	NoProgress bool
+	NoCache    bool
 	Advanced   bool
 	Details    bool
 	DeepDKIM   bool
@@ -29,6 +31,82 @@ type Options struct {
 
 type selectorFlags []string
 
+type flagValueKind int
+
+const (
+	boolFlag flagValueKind = iota
+	durationFlag
+	selectorFlag
+)
+
+type flagDefinition struct {
+	help        help.Flag
+	valueKind   flagValueKind
+	optionField string
+}
+
+var flagDefinitions = []flagDefinition{
+	{
+		help:      help.Flag{Names: []string{"selector"}, ValueName: "name", UsageValue: "name", Usage: "additional DKIM selector to try", UsageMode: help.UsageOption},
+		valueKind: selectorFlag,
+	},
+	{
+		help:        help.Flag{Names: []string{"json"}, Usage: "render machine-readable JSON", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "JSON",
+	},
+	{
+		help:        help.Flag{Names: []string{"no-cache"}, Usage: "disable DNS lookup caching for the run", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "NoCache",
+	},
+	{
+		help:        help.Flag{Names: []string{"no-color"}, Usage: "disable ANSI color in text output", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "NoColor",
+	},
+	{
+		help:        help.Flag{Names: []string{"no-progress"}, Usage: "disable interactive progress output", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "NoProgress",
+	},
+	{
+		help:        help.Flag{Names: []string{"advanced"}, Usage: "include mail DNS diagnostic checks", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "Advanced",
+	},
+	{
+		help:        help.Flag{Names: []string{"details"}, Usage: "show raw DNS records and lookup details", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "Details",
+	},
+	{
+		help:        help.Flag{Names: []string{"verbose"}, Usage: "alias for --details", UsageMode: help.UsageFlagListOnly},
+		valueKind:   boolFlag,
+		optionField: "Details",
+	},
+	{
+		help:        help.Flag{Names: []string{"dkim-deep"}, Usage: "try the extended DKIM selector list", UsageMode: help.UsageOption},
+		valueKind:   boolFlag,
+		optionField: "DeepDKIM",
+	},
+	{
+		help:        help.Flag{Names: []string{"timeout"}, ValueName: "value", UsageValue: "30s", Default: DefaultTimeout.String(), Usage: "total DNS lookup timeout", UsageMode: help.UsageOption},
+		valueKind:   durationFlag,
+		optionField: "Timeout",
+	},
+	{
+		help:        help.Flag{Names: []string{"version", "v"}, Usage: "print version and exit", UsageMode: help.UsageCommand},
+		valueKind:   boolFlag,
+		optionField: "Version",
+	},
+	{
+		help:        help.Flag{Names: []string{"help", "h"}, Usage: "print help message and exit", UsageMode: help.UsageCommand},
+		valueKind:   boolFlag,
+		optionField: "Help",
+	},
+}
+
 func (s *selectorFlags) String() string {
 	return strings.Join(*s, ",")
 }
@@ -36,6 +114,14 @@ func (s *selectorFlags) String() string {
 func (s *selectorFlags) Set(value string) error {
 	*s = append(*s, value)
 	return nil
+}
+
+func Help() string {
+	flags := make([]help.Flag, 0, len(flagDefinitions))
+	for _, definition := range flagDefinitions {
+		flags = append(flags, definition.help)
+	}
+	return help.Format("mailcheck", "domain.example", flags)
 }
 
 func ParseArgs(args []string, stderr io.Writer) (Options, error) {
@@ -48,21 +134,9 @@ func ParseArgs(args []string, stderr io.Writer) (Options, error) {
 
 	fs := flag.NewFlagSet("mailcheck", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Var(&selectors, "selector", "additional DKIM selector to try")
-	fs.BoolVar(&opts.JSON, "json", false, "render machine-readable JSON")
-	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI color in text output")
-	fs.BoolVar(&opts.NoProgress, "no-progress", false, "disable interactive progress output")
-	fs.BoolVar(&opts.Advanced, "advanced", false, "include mail DNS diagnostic checks")
-	fs.BoolVar(&opts.Details, "details", false, "show raw DNS records and lookup details")
-	fs.BoolVar(&opts.Details, "verbose", false, "alias for --details")
-	fs.BoolVar(&opts.DeepDKIM, "dkim-deep", false, "try the extended DKIM selector list")
-	fs.BoolVar(&opts.Version, "version", false, "print version and exit")
-	fs.BoolVar(&opts.Version, "v", false, "print version and exit")
-	fs.BoolVar(&opts.Help, "help", false, "print help message and exit")
-	fs.BoolVar(&opts.Help, "h", false, "print help message and exit")
-	fs.DurationVar(&opts.Timeout, "timeout", DefaultTimeout, "total DNS lookup timeout")
+	registerFlags(fs, &opts, &selectors)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, help.GetHelp())
+		fmt.Fprintln(stderr, Help())
 		fmt.Fprintln(stderr)
 	}
 
@@ -104,6 +178,7 @@ func finalizeFlagOnlyCommand(flagName string, enabled bool, fs *flag.FlagSet, se
 
 func normalizeArgs(args []string) ([]string, error) {
 	normalized := make([]string, 0, len(args))
+	valueFlags, boolFlags := knownFlags()
 	var domain string
 	var expectsValue bool
 
@@ -115,20 +190,10 @@ func normalizeArgs(args []string) ([]string, error) {
 		}
 
 		switch {
-		case arg == "--selector" || arg == "--timeout":
+		case strings.HasPrefix(arg, "--") && valueFlags[strings.TrimPrefix(arg, "--")]:
 			normalized = append(normalized, arg)
 			expectsValue = true
-		case strings.HasPrefix(arg, "--selector="),
-			strings.HasPrefix(arg, "--timeout="),
-			arg == "--json",
-			arg == "--no-color",
-			arg == "--no-progress",
-			arg == "--advanced",
-			arg == "--details",
-			arg == "--verbose",
-			arg == "--dkim-deep",
-			arg == "--help",
-			arg == "--version":
+		case strings.HasPrefix(arg, "--") && isKnownLongFlag(arg, valueFlags, boolFlags):
 			normalized = append(normalized, arg)
 		case strings.HasPrefix(arg, "-"):
 			normalized = append(normalized, arg)
@@ -148,6 +213,89 @@ func normalizeArgs(args []string) ([]string, error) {
 	}
 
 	return normalized, nil
+}
+
+func registerFlags(fs *flag.FlagSet, opts *Options, selectors *selectorFlags) {
+	registerFlagDefinitions(fs, opts, selectors, flagDefinitions)
+}
+
+func registerFlagDefinitions(fs *flag.FlagSet, opts *Options, selectors *selectorFlags, definitions []flagDefinition) {
+	for _, definition := range definitions {
+		registerFlagDefinition(fs, opts, selectors, definition)
+	}
+}
+
+func registerFlagDefinition(fs *flag.FlagSet, opts *Options, selectors *selectorFlags, definition flagDefinition) {
+	switch definition.valueKind {
+	case boolFlag:
+		target := boolOptionField(opts, definition.optionField)
+		for _, name := range definition.help.Names {
+			fs.BoolVar(target, name, false, definition.help.Usage)
+		}
+	case durationFlag:
+		target := durationOptionField(opts, definition.optionField)
+		for _, name := range definition.help.Names {
+			fs.DurationVar(target, name, DefaultTimeout, definition.help.Usage)
+		}
+	case selectorFlag:
+		fs.Var(selectors, definition.help.Names[0], definition.help.Usage)
+	default:
+		panic(fmt.Sprintf("unsupported flag value kind %d", definition.valueKind))
+	}
+}
+
+func knownFlags() (map[string]bool, map[string]bool) {
+	valueFlags := make(map[string]bool)
+	boolFlags := make(map[string]bool)
+
+	for _, definition := range flagDefinitions {
+		for _, name := range definition.help.Names {
+			if definition.takesValue() {
+				valueFlags[name] = true
+				continue
+			}
+			boolFlags[name] = true
+		}
+	}
+
+	return valueFlags, boolFlags
+}
+
+func (d flagDefinition) takesValue() bool {
+	return d.valueKind == durationFlag || d.valueKind == selectorFlag
+}
+
+func boolOptionField(opts *Options, name string) *bool {
+	field := optionField(opts, name, reflect.Bool)
+	return field.Addr().Interface().(*bool)
+}
+
+func durationOptionField(opts *Options, name string) *time.Duration {
+	field := optionField(opts, name, reflect.Int64)
+	if field.Type() != reflect.TypeOf(time.Duration(0)) {
+		panic(fmt.Sprintf("Options.%s is %s, want time.Duration", name, field.Type()))
+	}
+	return field.Addr().Interface().(*time.Duration)
+}
+
+func optionField(opts *Options, name string, kind reflect.Kind) reflect.Value {
+	field := reflect.ValueOf(opts).Elem().FieldByName(name)
+	if !field.IsValid() {
+		panic(fmt.Sprintf("Options.%s does not exist", name))
+	}
+	if field.Kind() != kind {
+		panic(fmt.Sprintf("Options.%s is %s, want %s", name, field.Kind(), kind))
+	}
+	return field
+}
+
+func isKnownLongFlag(arg string, valueFlags map[string]bool, boolFlags map[string]bool) bool {
+	name := strings.TrimPrefix(arg, "--")
+	if before, _, ok := strings.Cut(name, "="); ok {
+		name = before
+	}
+
+	return valueFlags[name] || boolFlags[name]
 }
 
 func BuildSelectors(explicit []string) []string {

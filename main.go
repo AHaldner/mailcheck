@@ -10,7 +10,6 @@ import (
 	"github.com/AHaldner/mailcheck/internal/checks"
 	"github.com/AHaldner/mailcheck/internal/cli"
 	"github.com/AHaldner/mailcheck/internal/dns"
-	"github.com/AHaldner/mailcheck/internal/help"
 	"github.com/AHaldner/mailcheck/internal/model"
 	"github.com/AHaldner/mailcheck/internal/report"
 	"github.com/AHaldner/mailcheck/internal/ui"
@@ -33,7 +32,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if opts.Help {
-		return writeFlagOutput(stdout, stderr, "help", help.GetHelp())
+		return writeFlagOutput(stdout, stderr, "help", cli.Help())
 	}
 
 	if err := cli.ValidateDomain(opts.Domain); err != nil {
@@ -87,7 +86,9 @@ type progressStarter interface {
 }
 
 func runChecks(ctx context.Context, resolver checkResolver, opts cli.Options, progress ...progressStarter) model.RunResult {
-	resolver = dns.NewCachedResolver(resolver)
+	if !opts.NoCache {
+		resolver = dns.NewCachedResolver(resolver)
+	}
 
 	start := func(name string) {
 		if len(progress) > 0 && progress[0] != nil {

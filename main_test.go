@@ -7,12 +7,12 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/AHaldner/mailcheck/internal/cli"
 	internaldns "github.com/AHaldner/mailcheck/internal/dns"
-	"github.com/AHaldner/mailcheck/internal/help"
 	"github.com/AHaldner/mailcheck/internal/model"
 	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
@@ -104,8 +104,8 @@ func TestRunHelpPrintsHelp(t *testing.T) {
 		t.Fatalf("ReadFile(stdout) error = %v", err)
 	}
 
-	if strings.TrimSpace(string(stdoutData)) != help.GetHelp() {
-		t.Fatalf("stdout = %q, want %q", strings.TrimSpace(string(stdoutData)), help.GetHelp())
+	if strings.TrimSpace(string(stdoutData)) != cli.Help() {
+		t.Fatalf("stdout = %q, want %q", strings.TrimSpace(string(stdoutData)), cli.Help())
 	}
 }
 
@@ -132,7 +132,7 @@ func TestRunHelpWithDomainPrintsHelpToStderr(t *testing.T) {
 		t.Fatalf("ReadFile(stderr) error = %v", err)
 	}
 
-	want := help.GetHelp() + "\n\nerror: --help does not accept a domain argument"
+	want := cli.Help() + "\n\nerror: --help does not accept a domain argument"
 	if strings.TrimSpace(string(stderrData)) != want {
 		t.Fatalf("stderr = %q, want %q", strings.TrimSpace(string(stderrData)), want)
 	}
@@ -222,6 +222,26 @@ func TestRunChecksUsesCallerTimeoutForDKIM(t *testing.T) {
 	}
 }
 
+func TestRunChecksNoCacheBypassesCachedResolver(t *testing.T) {
+	resolver := &countingMainResolver{}
+
+	result := runChecks(context.Background(), resolver, cli.Options{
+		Domain:   "example.com",
+		Advanced: true,
+		NoCache:  true,
+	})
+
+	if got := checkNames(result.Checks); !slices.Equal(got, []string{"MX", "SPF", "DMARC", "DKIM", "MX-A", "MX-AAAA", "PTR", "NS", "SOA", "DNSSEC", "DNS-TIME"}) {
+		t.Fatalf("check names = %v", got)
+	}
+
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	if resolver.mxCalls <= 1 {
+		t.Fatalf("LookupMX calls = %d, want repeated uncached lookups", resolver.mxCalls)
+	}
+}
+
 func TestRunChecksStartsCoreChecksConcurrently(t *testing.T) {
 	resolver := newConcurrentStartResolver()
 	done := make(chan model.RunResult, 1)
@@ -296,6 +316,12 @@ type dkimDeadlineResolver struct {
 	mainFakeResolver
 }
 
+type countingMainResolver struct {
+	mainFakeResolver
+	mu      sync.Mutex
+	mxCalls int
+}
+
 type concurrentStartResolver struct {
 	mainFakeResolver
 	started chan string
@@ -352,6 +378,14 @@ func (dkimDeadlineResolver) LookupTXT(ctx context.Context, name string) ([]strin
 	}
 
 	return []string{"v=DKIM1; p=abc123"}, nil
+}
+
+func (r *countingMainResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	r.mu.Lock()
+	r.mxCalls++
+	r.mu.Unlock()
+
+	return r.mainFakeResolver.LookupMX(ctx, domain)
 }
 
 func (mainFakeResolver) LookupMX(_ context.Context, domain string) ([]*net.MX, error) {
