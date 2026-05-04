@@ -501,6 +501,75 @@ func TestCheckDKIMFailsWhenExplicitSelectorDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestCheckDKIMWarnsWhenCommonSelectorMatchesAfterExplicitMiss(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"default._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"missing"}})
+	if got.Status != model.StatusWarn {
+		t.Fatalf("status = %s, want WARN", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"default"}) {
+		t.Fatalf("found = %v, want [default]", found)
+	}
+
+	if got.Summary != "DKIM records found for common selectors, but not for given selectors" {
+		t.Fatalf("summary = %q, want explicit selector warning summary", got.Summary)
+	}
+}
+
+func TestCheckDKIMReportsGivenSelectorMatch(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"custom._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"custom"}})
+	if got.Status != model.StatusPass {
+		t.Fatalf("status = %s, want PASS", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"custom"}) {
+		t.Fatalf("found = %v, want [custom]", found)
+	}
+
+	if got.Summary != "DKIM records found for given selectors" {
+		t.Fatalf("summary = %q, want given selector summary", got.Summary)
+	}
+}
+
+func TestCheckDKIMReportsGivenSelectorAlsoInCommonList(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"default._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"default"}})
+	if got.Status != model.StatusPass {
+		t.Fatalf("status = %s, want PASS", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"default"}) {
+		t.Fatalf("found = %v, want [default]", found)
+	}
+
+	if got.Summary != "DKIM records found for a given selector that is also common" {
+		t.Fatalf("summary = %q, want given selector also common summary", got.Summary)
+	}
+}
+
 func TestCheckDKIMPassesAndReturnsFoundSelectors(t *testing.T) {
 	r := fakeResolver{
 		txt: map[string][]string{
