@@ -65,6 +65,16 @@ func CheckDKIM(ctx context.Context, r dns.Resolver, domain string, opts DKIMOpti
 		lookupErrors = append(lookupErrors[:5], fmt.Sprintf("and %d more lookup errors", len(lookupErrors)-5))
 	}
 
+	if len(opts.Selectors) != 0 {
+		return model.CheckResult{
+			Name:       "DKIM",
+			Status:     model.StatusFail,
+			Summary:    "DKIM records were not found for given selectors",
+			Details:    lookupErrors,
+			Suggestion: dkimSuggestion(opts.Deep),
+		}, tried, nil
+	}
+
 	return model.CheckResult{
 		Name:       "DKIM",
 		Status:     model.StatusWarn,
@@ -95,9 +105,7 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 
 	var wg sync.WaitGroup
 	for range min(dkimConcurrentLookups, len(selectors)) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for job := range jobs {
 				select {
 				case <-lookupCtx.Done():
@@ -125,7 +133,7 @@ func lookupDKIMSelectors(ctx context.Context, r dns.Resolver, domain string, sel
 					records:  matchingDKIMRecords(txts),
 				}
 			}
-		}()
+		})
 	}
 
 	go func() {

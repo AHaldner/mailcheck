@@ -95,10 +95,10 @@ func dmarcRecordResult(source string, record string) model.CheckResult {
 	case "none":
 		return model.CheckResult{
 			Name:       "DMARC",
-			Status:     model.StatusWarn,
+			Status:     model.StatusPass,
 			Summary:    "Policy is monitoring only (p=none)",
 			Details:    []string{fmt.Sprintf("DMARC via %s: %s", source, record)},
-			Suggestion: "Switch to quarantine or reject after reviewing reports.",
+			Suggestion: "Consider switching to quarantine or reject after reviewing reports.",
 		}
 	case "quarantine":
 		return model.CheckResult{
