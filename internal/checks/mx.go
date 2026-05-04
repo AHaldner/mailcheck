@@ -72,6 +72,7 @@ func mxResult(ctx context.Context, r dns.Resolver, source string, records []*net
 			} else {
 				details = append(details, fmt.Sprintf("%s A/AAAA [0 records]", record.Host))
 			}
+
 			continue
 		}
 

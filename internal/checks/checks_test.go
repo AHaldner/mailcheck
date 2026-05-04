@@ -165,7 +165,7 @@ func TestCheckDMARCFailsWithoutPolicy(t *testing.T) {
 	}
 }
 
-func TestCheckDMARCWarnsForNonePolicy(t *testing.T) {
+func TestCheckDMARCPassesForNonePolicy(t *testing.T) {
 	r := fakeResolver{
 		txt: map[string][]string{
 			"_dmarc.example.com": {"v=DMARC1; p=none; rua=mailto:d@example.com"},
@@ -173,16 +173,16 @@ func TestCheckDMARCWarnsForNonePolicy(t *testing.T) {
 	}
 
 	got := CheckDMARC(context.Background(), r, "example.com")
-	if got.Status != model.StatusWarn {
-		t.Fatalf("status = %s, want WARN", got.Status)
+	if got.Status != model.StatusPass {
+		t.Fatalf("status = %s, want PASS", got.Status)
 	}
 
 	if got.Summary != "Policy is monitoring only (p=none)" {
-		t.Fatalf("summary = %q, want p=none warning", got.Summary)
+		t.Fatalf("summary = %q, want p=none note", got.Summary)
 	}
 
-	if got.Suggestion != "Switch to quarantine or reject after reviewing reports." {
-		t.Fatalf("suggestion = %q, want DMARC action", got.Suggestion)
+	if got.Suggestion != "Consider switching to quarantine or reject after reviewing reports." {
+		t.Fatalf("suggestion = %q, want DMARC note", got.Suggestion)
 	}
 }
 
@@ -471,7 +471,7 @@ func TestDKIMDeepCandidatesUseExtendedSelectorSweep(t *testing.T) {
 	}
 }
 
-func TestCheckDKIMWarnsWhenNoSelectorMatches(t *testing.T) {
+func TestCheckDKIMFailsWhenExplicitSelectorDoesNotMatch(t *testing.T) {
 	r := fakeResolver{
 		txtErr: map[string]error{
 			"default._domainkey.example.com":   errors.New("not found"),
@@ -480,8 +480,8 @@ func TestCheckDKIMWarnsWhenNoSelectorMatches(t *testing.T) {
 	}
 
 	got, tried, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"default", "selector1"}})
-	if got.Status != model.StatusWarn {
-		t.Fatalf("status = %s, want WARN", got.Status)
+	if got.Status != model.StatusFail {
+		t.Fatalf("status = %s, want FAIL", got.Status)
 	}
 
 	if len(tried) < 2 {
@@ -492,12 +492,81 @@ func TestCheckDKIMWarnsWhenNoSelectorMatches(t *testing.T) {
 		t.Fatalf("len(found) = %d, want 0", len(found))
 	}
 
-	if got.Summary != "DKIM records were not found for guessed selectors" {
-		t.Fatalf("summary = %q, want DKIM uncertainty", got.Summary)
+	if got.Summary != "DKIM records were not found for given selectors" {
+		t.Fatalf("summary = %q, want explicit DKIM selector failure", got.Summary)
 	}
 
 	if !containsString(got.Details, "selector selector1 [lookup failed]: SERVFAIL") {
 		t.Fatalf("details = %v, want friendly DKIM lookup detail", got.Details)
+	}
+}
+
+func TestCheckDKIMWarnsWhenCommonSelectorMatchesAfterExplicitMiss(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"default._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"missing"}})
+	if got.Status != model.StatusWarn {
+		t.Fatalf("status = %s, want WARN", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"default"}) {
+		t.Fatalf("found = %v, want [default]", found)
+	}
+
+	if got.Summary != "DKIM records found for common selectors, but not for given selectors" {
+		t.Fatalf("summary = %q, want explicit selector warning summary", got.Summary)
+	}
+}
+
+func TestCheckDKIMReportsGivenSelectorMatch(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"custom._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"custom"}})
+	if got.Status != model.StatusPass {
+		t.Fatalf("status = %s, want PASS", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"custom"}) {
+		t.Fatalf("found = %v, want [custom]", found)
+	}
+
+	if got.Summary != "DKIM records found for given selectors" {
+		t.Fatalf("summary = %q, want given selector summary", got.Summary)
+	}
+}
+
+func TestCheckDKIMReportsGivenSelectorAlsoInCommonList(t *testing.T) {
+	r := fakeResolver{
+		txt: map[string][]string{
+			"default._domainkey.example.com": {
+				"v=DKIM1; k=rsa; p=abc123",
+			},
+		},
+	}
+
+	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"default"}})
+	if got.Status != model.StatusPass {
+		t.Fatalf("status = %s, want PASS", got.Status)
+	}
+
+	if !slices.Equal(found, []string{"default"}) {
+		t.Fatalf("found = %v, want [default]", found)
+	}
+
+	if got.Summary != "DKIM records found for a given selector that is also common" {
+		t.Fatalf("summary = %q, want given selector also common summary", got.Summary)
 	}
 }
 
@@ -588,8 +657,8 @@ func TestCheckDKIMIgnoresInvalidRecords(t *testing.T) {
 	}
 
 	got, _, found := CheckDKIM(context.Background(), r, "example.com", DKIMOptions{Selectors: []string{"default", "selector1"}})
-	if got.Status != model.StatusWarn {
-		t.Fatalf("status = %s, want WARN", got.Status)
+	if got.Status != model.StatusFail {
+		t.Fatalf("status = %s, want FAIL", got.Status)
 	}
 
 	if len(found) != 0 {
