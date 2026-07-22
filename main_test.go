@@ -14,8 +14,151 @@ import (
 	"github.com/AHaldner/mailcheck/internal/cli"
 	internaldns "github.com/AHaldner/mailcheck/internal/dns"
 	"github.com/AHaldner/mailcheck/internal/model"
+	"github.com/AHaldner/mailcheck/internal/update"
 	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
+
+func TestRunUpgrade(t *testing.T) {
+	oldVersion := appversion.Value
+	appversion.Value = "v1.2.3"
+	t.Cleanup(func() { appversion.Value = oldVersion })
+
+	tests := []struct {
+		name       string
+		result     update.Result
+		err        error
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{
+			name:       "changed",
+			result:     update.Result{From: "v1.2.3", To: "v1.3.0", Changed: true},
+			wantCode:   0,
+			wantStdout: "upgraded mailcheck from v1.2.3 to v1.3.0\n",
+		},
+		{
+			name:       "unchanged",
+			result:     update.Result{From: "v1.2.3", To: "v1.2.3"},
+			wantCode:   0,
+			wantStdout: "mailcheck is already up to date (v1.2.3)\n",
+		},
+		{
+			name:       "error",
+			err:        errors.New("permission denied"),
+			wantCode:   1,
+			wantStderr: "error: failed to upgrade mailcheck: permission denied\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldUpgrade := upgradeMailcheck
+			t.Cleanup(func() { upgradeMailcheck = oldUpgrade })
+
+			var gotCurrent string
+			upgradeMailcheck = func(_ context.Context, current string) (update.Result, error) {
+				gotCurrent = current
+				return tt.result, tt.err
+			}
+
+			var stdout strings.Builder
+			var stderr strings.Builder
+			code := run([]string{"upgrade"}, &stdout, &stderr)
+
+			if code != tt.wantCode {
+				t.Fatalf("run() code = %d, want %d", code, tt.wantCode)
+			}
+			if gotCurrent != "v1.2.3" {
+				t.Fatalf("upgrade current = %q, want %q", gotCurrent, "v1.2.3")
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Fatalf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if got := stderr.String(); got != tt.wantStderr {
+				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestRunUpdateNoticeAfterFailingTextReport(t *testing.T) {
+	oldVersion := appversion.Value
+	appversion.Value = "v1.2.3"
+	t.Cleanup(func() { appversion.Value = oldVersion })
+
+	oldCheck := checkUpdateNotice
+	t.Cleanup(func() { checkUpdateNotice = oldCheck })
+
+	const notice = `A new mailcheck version is available: v1.3.0 (current: v1.2.3). Run "mailcheck upgrade".`
+	var stdout strings.Builder
+	var stderr strings.Builder
+	var gotCurrent string
+	calledBeforeReport := false
+	checkUpdateNotice = func(_ context.Context, current string) string {
+		gotCurrent = current
+		calledBeforeReport = stdout.Len() == 0
+		return notice
+	}
+
+	code := run([]string{"example.com", "--timeout", "1ns", "--no-progress", "--no-color"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("run() code = %d, want 1", code)
+	}
+	if gotCurrent != "v1.2.3" {
+		t.Fatalf("notice current = %q, want %q", gotCurrent, "v1.2.3")
+	}
+	if calledBeforeReport {
+		t.Fatal("update notice checked before report was written")
+	}
+	if strings.Contains(stdout.String(), notice) {
+		t.Fatalf("stdout contained update notice:\n%s", stdout.String())
+	}
+	if got := stderr.String(); got != notice+"\n" {
+		t.Fatalf("stderr = %q, want %q", got, notice+"\n")
+	}
+}
+
+func TestRunUpdateNoticeExclusions(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "json", args: []string{"example.com", "--json", "--timeout", "1ns", "--no-progress"}},
+		{name: "help", args: []string{"--help"}},
+		{name: "version", args: []string{"--version"}},
+		{name: "upgrade", args: []string{"upgrade"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldCheck := checkUpdateNotice
+			t.Cleanup(func() { checkUpdateNotice = oldCheck })
+			called := false
+			checkUpdateNotice = func(context.Context, string) string {
+				called = true
+				return "unexpected notice"
+			}
+
+			if tt.name == "upgrade" {
+				oldUpgrade := upgradeMailcheck
+				t.Cleanup(func() { upgradeMailcheck = oldUpgrade })
+				upgradeMailcheck = func(context.Context, string) (update.Result, error) {
+					return update.Result{From: "v1.2.3", To: "v1.2.3"}, nil
+				}
+			}
+
+			var stdout strings.Builder
+			var stderr strings.Builder
+			_ = run(tt.args, &stdout, &stderr)
+
+			if called {
+				t.Fatalf("checkUpdateNotice called for %s mode", tt.name)
+			}
+		})
+	}
+}
 
 func TestRunVersionPrintsVersion(t *testing.T) {
 	oldValue := appversion.Value
@@ -139,6 +282,10 @@ func TestRunHelpWithDomainPrintsHelpToStderr(t *testing.T) {
 }
 
 func TestRunDoesNotEmitProgressToNonTTYStderr(t *testing.T) {
+	oldCheck := checkUpdateNotice
+	checkUpdateNotice = func(context.Context, string) string { return "" }
+	t.Cleanup(func() { checkUpdateNotice = oldCheck })
+
 	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
 	if err != nil {
 		t.Fatalf("CreateTemp(stdout) error = %v", err)

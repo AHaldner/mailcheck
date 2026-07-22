@@ -13,8 +13,19 @@ import (
 	"github.com/AHaldner/mailcheck/internal/model"
 	"github.com/AHaldner/mailcheck/internal/report"
 	"github.com/AHaldner/mailcheck/internal/ui"
+	"github.com/AHaldner/mailcheck/internal/update"
 	appversion "github.com/AHaldner/mailcheck/internal/version"
 )
+
+var upgradeMailcheck = func(ctx context.Context, current string) (update.Result, error) {
+	upgrader := update.NewUpgrader(current)
+	return upgrader.Upgrade(ctx, current)
+}
+
+var checkUpdateNotice = func(ctx context.Context, current string) string {
+	checker := update.NewNoticeChecker(current)
+	return checker.Check(ctx, current)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -25,6 +36,20 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
+	}
+
+	if opts.Upgrade {
+		result, err := upgradeMailcheck(context.Background(), appversion.Current())
+		if err != nil {
+			fmt.Fprintf(stderr, "error: failed to upgrade mailcheck: %v\n", err)
+			return 1
+		}
+
+		if result.Changed {
+			return writeFlagOutput(stdout, stderr, "upgrade", fmt.Sprintf("upgraded mailcheck from %s to %s", result.From, result.To))
+		}
+
+		return writeFlagOutput(stdout, stderr, "upgrade", fmt.Sprintf("mailcheck is already up to date (%s)", result.To))
 	}
 
 	if opts.Version {
@@ -69,11 +94,18 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
+	exitCode := 0
 	if hasFail(runResult.Checks) {
-		return 1
+		exitCode = 1
 	}
 
-	return 0
+	if !opts.JSON {
+		if notice := checkUpdateNotice(context.Background(), appversion.Current()); notice != "" {
+			_, _ = fmt.Fprintln(stderr, notice)
+		}
+	}
+
+	return exitCode
 }
 
 type checkResolver interface {
