@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 )
 
 // Replacer installs a verified executable while preserving the previous one
@@ -13,6 +14,7 @@ import (
 type Replacer struct {
 	Rename func(string, string) error
 	Remove func(string) error
+	GOOS   string
 }
 
 // NewReplacer returns a Replacer backed by the operating system filesystem.
@@ -20,6 +22,7 @@ func NewReplacer() Replacer {
 	return Replacer{
 		Rename: os.Rename,
 		Remove: os.Remove,
+		GOOS:   runtime.GOOS,
 	}
 }
 
@@ -33,6 +36,10 @@ func (r Replacer) Replace(executablePath string, binary []byte) (result error) {
 	remove := r.Remove
 	if remove == nil {
 		remove = os.Remove
+	}
+	goos := r.GOOS
+	if goos == "" {
+		goos = runtime.GOOS
 	}
 
 	directory := filepath.Dir(executablePath)
@@ -107,7 +114,10 @@ func (r Replacer) Replace(executablePath string, binary []byte) (result error) {
 		return fmt.Errorf("install staged executable: %w", err)
 	}
 
-	if err := remove(backupPath); err != nil && runtime.GOOS != "windows" {
+	if err := remove(backupPath); err != nil {
+		if goos == "windows" && errors.Is(err, syscall.Errno(32)) {
+			return nil
+		}
 		return fmt.Errorf("remove executable backup: %w", err)
 	}
 	return nil
