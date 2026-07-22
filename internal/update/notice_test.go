@@ -16,8 +16,6 @@ const updateNotice = `A new mailcheck version is available: v1.3.0 (current: v1.
 
 var noticeNow = time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
 
-const testNoticeLockToken = "00112233445566778899aabbccddeeff"
-
 func TestNoticeCheckerSkipsInvalidCurrentVersion(t *testing.T) {
 	requests := 0
 	checker := testNoticeChecker(t, noticeNow, func(context.Context) (string, error) {
@@ -162,121 +160,42 @@ func TestNoticeCheckerOverlappingChecksMakeOneRequestAndNotice(t *testing.T) {
 	}
 }
 
-func TestNoticeCheckerRecoversStaleLock(t *testing.T) {
-	checker := testNoticeChecker(t, noticeNow, func(context.Context) (string, error) {
-		return "v1.3.0", nil
-	})
-	lockPath := checker.CachePath + ".lock"
-	staleTime := time.Now().Add(-10 * time.Minute)
-	writeTestNoticeLock(t, lockPath, testNoticeLockToken, staleTime)
-
-	if got := checker.Check(context.Background(), "v1.2.3"); got != updateNotice {
-		t.Fatalf("Check() = %q, want %q", got, updateNotice)
-	}
-	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock stat error = %v, want not exist", err)
-	}
-}
-
-func TestNoticeCheckerRecoversAbandonedStaleClaim(t *testing.T) {
-	checker := testNoticeChecker(t, noticeNow, func(context.Context) (string, error) {
-		return "v1.3.0", nil
-	})
-	lockPath := checker.CachePath + ".lock"
-	staleTime := time.Now().Add(-10 * time.Minute)
-	if err := os.MkdirAll(lockPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(lockPath, noticeLockStaleName(testNoticeLockToken)), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := checker.Check(context.Background(), "v1.2.3"); got != updateNotice {
-		t.Fatalf("Check() = %q, want %q", got, updateNotice)
-	}
-}
-
-func TestNoticeCheckerConcurrentStaleLockRecoveryHasSingleWinner(t *testing.T) {
+func TestNoticeCheckerContendedLockSkipsClockCacheAndLatest(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "mailcheck", "update.json")
-	lockPath := cachePath + ".lock"
-	staleTime := time.Now().Add(-10 * time.Minute)
-	writeTestNoticeLock(t, lockPath, testNoticeLockToken, staleTime)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := acquireFileLock(cachePath + ".lock")
+	if err != nil {
+		t.Fatalf("acquireFileLock(owner) error = %v", err)
+	}
+	t.Cleanup(func() { _ = owner.release() })
 
-	latestStarted := make(chan struct{}, 1)
-	releaseLatest := make(chan struct{})
-	var latestCalls atomic.Int32
+	clockCalls := 0
+	latestCalls := 0
 	checker := NoticeChecker{
-		Now:       func() time.Time { return noticeNow },
+		Now: func() time.Time {
+			clockCalls++
+			return noticeNow
+		},
 		CachePath: cachePath,
 		Latest: func(context.Context) (string, error) {
-			latestCalls.Add(1)
-			latestStarted <- struct{}{}
-			<-releaseLatest
+			latestCalls++
 			return "v1.3.0", nil
 		},
 	}
 
-	start := make(chan struct{})
-	results := make(chan string, 2)
-	for range 2 {
-		go func() {
-			<-start
-			results <- checker.Check(context.Background(), "v1.2.3")
-		}()
+	if got := checker.Check(context.Background(), "v1.2.3"); got != "" {
+		t.Fatalf("Check() = %q, want empty notice", got)
 	}
-	close(start)
-	select {
-	case <-latestStarted:
-	case <-time.After(time.Second):
-		t.Fatal("no stale-lock contender recovered the lease")
+	if clockCalls != 0 {
+		t.Fatalf("clock calls = %d, want 0", clockCalls)
 	}
-	close(releaseLatest)
-
-	notices := 0
-	for range 2 {
-		if got := <-results; got != "" {
-			if got != updateNotice {
-				t.Fatalf("Check() = %q, want %q or empty", got, updateNotice)
-			}
-			notices++
-		}
+	if latestCalls != 0 {
+		t.Fatalf("latest calls = %d, want 0", latestCalls)
 	}
-	if got := latestCalls.Load(); got != 1 {
-		t.Fatalf("latest calls = %d, want 1", got)
-	}
-	if notices != 1 {
-		t.Fatalf("notices = %d, want 1", notices)
-	}
-}
-
-func TestDirectoryLeaseExpiredOwnerCannotReleaseSuccessor(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), "update.lock")
-	oldOwner, err := createDirectoryLease(lockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	staleTime := now.Add(-10 * time.Minute)
-	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
-		t.Fatal(err)
-	}
-
-	successor, ok := acquireDirectoryLease(lockPath, now, noticeLockLease)
-	if !ok {
-		t.Fatal("successor failed to recover expired lease")
-	}
-	if err := oldOwner.release(); err == nil {
-		t.Fatal("expired owner released successor lease")
-	}
-	if contender, acquired := acquireDirectoryLease(lockPath, now, noticeLockLease); acquired {
-		_ = contender.release()
-		t.Fatal("contender acquired while successor lease was live")
-	}
-	if err := successor.release(); err != nil {
-		t.Fatalf("successor release error = %v", err)
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache stat error = %v, want not exist", err)
 	}
 }
 
@@ -545,17 +464,4 @@ func readTestNoticeCache(t *testing.T, path string) noticeCache {
 		t.Fatalf("decode cache: %v", err)
 	}
 	return state
-}
-
-func writeTestNoticeLock(t *testing.T, path, token string, modified time.Time) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(path, noticeLockOwnerName(token)), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, modified, modified); err != nil {
-		t.Fatal(err)
-	}
 }

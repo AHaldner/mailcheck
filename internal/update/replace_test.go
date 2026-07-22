@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -223,6 +224,27 @@ func TestReplacerReplaceSerializesOverlappingCalls(t *testing.T) {
 	assertNoReplacementFiles(t, directory)
 }
 
+func TestReplacerReplacePreservesLockAcquisitionError(t *testing.T) {
+	directory := t.TempDir()
+	parentFile := filepath.Join(directory, "not-a-directory")
+	if err := os.WriteFile(parentFile, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(parentFile, "mailcheck")
+
+	err := NewReplacer().Replace(executable, []byte("new"))
+	if err == nil {
+		t.Fatal("Replace() error = nil, want lock acquisition error")
+	}
+	if errors.Is(err, ErrLockContended) {
+		t.Fatalf("Replace() error = %v, want non-contention lock error", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("Replace() error = %v, want preserved *os.PathError", err)
+	}
+}
+
 func TestReplacerReplaceReturnsNonWindowsBackupRemovalFailure(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "mailcheck")
@@ -390,8 +412,10 @@ func assertNoReplacementFiles(t *testing.T, directory string) {
 	if err != nil {
 		t.Fatalf("Glob(replacement files) error = %v", err)
 	}
-	if len(files) != 0 {
-		t.Fatalf("replacement files remain: %v", files)
+	for _, path := range files {
+		if !strings.HasPrefix(filepath.Base(path), ".mailcheck-upgrade-lock-") {
+			t.Fatalf("replacement file remains: %v", path)
+		}
 	}
 }
 

@@ -9,10 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
-	"time"
 )
-
-const replacementLockLease = 5 * time.Minute
 
 // Replacer installs a verified executable while preserving the previous one
 // until installation succeeds.
@@ -40,9 +37,12 @@ func (r Replacer) Replace(executablePath string, binary []byte) (result error) {
 // ReplaceFrom streams source into a same-directory staged file, then atomically
 // installs it while preserving the previous executable until installation succeeds.
 func (r Replacer) ReplaceFrom(executablePath string, source io.Reader) (result error) {
-	lock, ok := acquireDirectoryLease(replacementLockPath(executablePath), time.Now(), replacementLockLease)
-	if !ok {
-		return fmt.Errorf("replacement already in progress or replacement lock is unavailable")
+	lock, err := acquireFileLock(replacementLockPath(executablePath))
+	if errors.Is(err, ErrLockContended) {
+		return fmt.Errorf("replacement already in progress: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("acquire replacement lock: %w", err)
 	}
 	defer func() {
 		if err := lock.release(); err != nil {

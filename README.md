@@ -105,7 +105,7 @@ go test ./...
 - After a text run, a stable tagged build checks GitHub for updates at most once per day. If a newer stable release is available, mailcheck prints a notice to `stderr` once for that release.
 - `mailcheck upgrade` verifies the downloaded release archive against its `checksums.txt` SHA-256 checksum before replacing the executable.
 - Self-upgrade release builds are available for macOS, Linux, and Windows on `amd64` and `arm64` systems.
-- Upgrading requires write permission for the installed `mailcheck` executable and its containing directory. If either is read-only, install a release manually somewhere you can write.
+- On Unix, upgrading requires permission to replace entries in the directory containing `mailcheck`; the executable file itself does not need to be writable. Other platforms may impose additional restrictions, so if replacement is denied, install a release manually in a location you can manage.
 - The tool only checks DNS records. It does not test SMTP, TLS, inbox placement, or message signing end-to-end.
 
 ## Example

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -299,7 +300,7 @@ func TestExtractExecutableToRejectsExcessIrrelevantTarData(t *testing.T) {
 			maxArchiveBytes:         1 << 20,
 			maxExecutableBytes:      1 << 10,
 			maxDecompressedTarBytes: 1 << 10,
-			maxEntries:              10,
+			maxTarLogicalEntries:    10,
 		},
 	)
 	requireErrorContains(t, err, "tar archive exceeds maximum decompressed size")
@@ -321,10 +322,10 @@ func TestExtractExecutableToRejectsTooManyTarEntries(t *testing.T) {
 			maxArchiveBytes:         1 << 20,
 			maxExecutableBytes:      1 << 10,
 			maxDecompressedTarBytes: 1 << 20,
-			maxEntries:              2,
+			maxTarLogicalEntries:    2,
 		},
 	)
-	requireErrorContains(t, err, "tar archive exceeds maximum entry count")
+	requireErrorContains(t, err, "tar archive exceeds maximum logical entry count")
 }
 
 func TestExtractExecutableToRejectsTooManyZipEntries(t *testing.T) {
@@ -343,10 +344,152 @@ func TestExtractExecutableToRejectsTooManyZipEntries(t *testing.T) {
 			maxArchiveBytes:         1 << 20,
 			maxExecutableBytes:      1 << 10,
 			maxDecompressedTarBytes: 1 << 20,
-			maxEntries:              2,
+			maxZipEntries:           2,
 		},
 	)
 	requireErrorContains(t, err, "zip archive exceeds maximum entry count")
+}
+
+func TestExtractExecutableToPreflightsOrdinaryZipEntryCountWithComment(t *testing.T) {
+	archive := ordinaryZipEOCD(0xfffe, 0, 0, []byte("comment PK\x05\x06 inside"))
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToPreflightsZip64EntryCount(t *testing.T) {
+	archive := zip64EOCD(1<<63, 0)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToPreflightsUnderstatedOrdinaryZipEntryCount(t *testing.T) {
+	archive := understatedOrdinaryZipDirectory(3, 1)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToPreflightsGoRawDirectoryOffsetFallback(t *testing.T) {
+	directory := repeatedZipCentralDirectoryHeaders(3)
+	archive := append(directory, ordinaryZipEOCD(1, 46, 0, nil)...)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToPreflightsInvalidRawDirectoryFallbackCandidate(t *testing.T) {
+	archive := invalidRawFallbackZipDirectory(3, 1)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToPreflightsUnderstatedZip64EntryCount(t *testing.T) {
+	archive := understatedZip64Directory(3, 1)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(2),
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count of 2")
+}
+
+func TestExtractExecutableToRejectsZipEntryCountMismatch(t *testing.T) {
+	archive := understatedOrdinaryZipDirectory(2, 1)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		testExtractionLimits(3),
+	)
+	requireErrorContains(t, err, "zip central directory entry count mismatch")
+}
+
+func TestExtractExecutableAcceptsZip64DirectoryMetadata(t *testing.T) {
+	archive := promoteZipToZip64(t, zipFile(t, archiveFile{name: "mailcheck.exe", data: []byte("executable")}))
+
+	got, err := ExtractExecutable("mailcheck_1.2.3_windows_amd64.zip", archive)
+	if err != nil {
+		t.Fatalf("ExtractExecutable() error = %v", err)
+	}
+	if string(got) != "executable" {
+		t.Fatalf("ExtractExecutable() = %q, want executable", got)
+	}
+}
+
+func TestExtractExecutableToRejectsMalformedZipDirectoryMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		archive []byte
+		want    string
+	}{
+		{
+			name:    "ordinary central directory out of bounds",
+			archive: ordinaryZipEOCD(1, 8, 999, nil),
+			want:    "zip central directory is out of bounds",
+		},
+		{
+			name:    "Zip64 locator missing",
+			archive: ordinaryZipEOCD(0xffff, 0xffffffff, 0xffffffff, nil),
+			want:    "zip64 locator is missing",
+		},
+		{
+			name:    "Zip64 record offset out of bounds",
+			archive: zip64EOCD(1, 1<<32),
+			want:    "zip64 end of central directory offset is out of bounds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var destination bytes.Buffer
+			err := extractExecutableTo(
+				"mailcheck_1.2.3_windows_amd64.zip",
+				bytes.NewReader(tt.archive),
+				int64(len(tt.archive)),
+				&destination,
+				testExtractionLimits(2),
+			)
+			requireErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func requireErrorContains(t *testing.T, err error, want string) {
@@ -362,6 +505,99 @@ func requireErrorContains(t *testing.T, err error, want string) {
 type archiveFile struct {
 	name string
 	data []byte
+}
+
+func testExtractionLimits(maxEntries int) extractionLimits {
+	return extractionLimits{
+		maxArchiveBytes:         1 << 20,
+		maxExecutableBytes:      1 << 10,
+		maxDecompressedTarBytes: 1 << 20,
+		maxTarLogicalEntries:    maxEntries,
+		maxZipEntries:           maxEntries,
+	}
+}
+
+func ordinaryZipEOCD(totalEntries uint16, directorySize, directoryOffset uint32, comment []byte) []byte {
+	record := make([]byte, 22+len(comment))
+	binary.LittleEndian.PutUint32(record[0:4], 0x06054b50)
+	binary.LittleEndian.PutUint16(record[8:10], totalEntries)
+	binary.LittleEndian.PutUint16(record[10:12], totalEntries)
+	binary.LittleEndian.PutUint32(record[12:16], directorySize)
+	binary.LittleEndian.PutUint32(record[16:20], directoryOffset)
+	binary.LittleEndian.PutUint16(record[20:22], uint16(len(comment)))
+	copy(record[22:], comment)
+	return record
+}
+
+func zip64EOCD(totalEntries, locatorOffset uint64) []byte {
+	record := make([]byte, 56+20)
+	binary.LittleEndian.PutUint32(record[0:4], 0x06064b50)
+	binary.LittleEndian.PutUint64(record[4:12], 44)
+	binary.LittleEndian.PutUint16(record[12:14], 45)
+	binary.LittleEndian.PutUint16(record[14:16], 45)
+	binary.LittleEndian.PutUint64(record[24:32], totalEntries)
+	binary.LittleEndian.PutUint64(record[32:40], totalEntries)
+
+	locator := record[56:]
+	binary.LittleEndian.PutUint32(locator[0:4], 0x07064b50)
+	binary.LittleEndian.PutUint64(locator[8:16], locatorOffset)
+	binary.LittleEndian.PutUint32(locator[16:20], 1)
+
+	eocd := ordinaryZipEOCD(0xffff, 0xffffffff, 0xffffffff, nil)
+	return append(record, eocd...)
+}
+
+func promoteZipToZip64(t *testing.T, archive []byte) []byte {
+	t.Helper()
+	if len(archive) < 22 {
+		t.Fatal("ordinary zip is too small")
+	}
+	eocdOffset := len(archive) - 22
+	eocd := archive[eocdOffset:]
+	if binary.LittleEndian.Uint32(eocd[0:4]) != zipDirectoryEndSignature {
+		t.Fatal("ordinary zip EOCD signature not found")
+	}
+	totalEntries := uint64(binary.LittleEndian.Uint16(eocd[10:12]))
+	directorySize := uint64(binary.LittleEndian.Uint32(eocd[12:16]))
+	directoryOffset := uint64(binary.LittleEndian.Uint32(eocd[16:20]))
+
+	recordAndLocator := zip64EOCD(totalEntries, uint64(eocdOffset))
+	record := recordAndLocator[:56]
+	binary.LittleEndian.PutUint64(record[40:48], directorySize)
+	binary.LittleEndian.PutUint64(record[48:56], directoryOffset)
+
+	result := append([]byte(nil), archive[:eocdOffset]...)
+	result = append(result, recordAndLocator...)
+	return result
+}
+
+func understatedOrdinaryZipDirectory(actualEntries int, claimedEntries uint16) []byte {
+	directory := repeatedZipCentralDirectoryHeaders(actualEntries)
+	return append(directory, ordinaryZipEOCD(claimedEntries, uint32(len(directory)), 0, nil)...)
+}
+
+func understatedZip64Directory(actualEntries int, claimedEntries uint64) []byte {
+	directory := repeatedZipCentralDirectoryHeaders(actualEntries)
+	metadata := zip64EOCD(claimedEntries, uint64(len(directory)))
+	binary.LittleEndian.PutUint64(metadata[40:48], uint64(len(directory)))
+	return append(directory, metadata...)
+}
+
+func repeatedZipCentralDirectoryHeaders(count int) []byte {
+	directory := make([]byte, count*46)
+	for index := range count {
+		binary.LittleEndian.PutUint32(directory[index*46:index*46+4], 0x02014b50)
+	}
+	return directory
+}
+
+func invalidRawFallbackZipDirectory(actualEntries int, claimedEntries uint16) []byte {
+	fakeRawHeader := repeatedZipCentralDirectoryHeaders(1)
+	binary.LittleEndian.PutUint32(fakeRawHeader[20:24], 0xffffffff)
+	prefix := append(fakeRawHeader, []byte("JUNK")...)
+	directory := repeatedZipCentralDirectoryHeaders(actualEntries)
+	archive := append(prefix, directory...)
+	return append(archive, ordinaryZipEOCD(claimedEntries, uint32(len(directory)), 0, nil)...)
 }
 
 func tarGz(t *testing.T, files ...archiveFile) []byte {
