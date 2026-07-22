@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -45,6 +46,18 @@ func TestReleaseClientLatest(t *testing.T) {
 	}
 }
 
+func TestReleaseClientLatestAllowsBuildMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"tag_name":"v1.2.3+build-1","assets":[{"name":"checksums.txt","browser_download_url":%q}]}`, serverURL(r))
+	}))
+	defer server.Close()
+
+	client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL, UserAgent: "mailcheck/test"}
+	if _, err := client.Latest(context.Background()); err != nil {
+		t.Fatalf("Latest() error = %v", err)
+	}
+}
+
 func TestReleaseClientLatestRejectsInvalidResponse(t *testing.T) {
 	tests := []struct {
 		name string
@@ -52,6 +65,7 @@ func TestReleaseClientLatestRejectsInvalidResponse(t *testing.T) {
 		code int
 	}{
 		{name: "invalid tag", body: `{"tag_name":"latest","assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/checksums.txt"}]}`, code: http.StatusOK},
+		{name: "pre-release tag", body: `{"tag_name":"v1.2.3-rc.1","assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/checksums.txt"}]}`, code: http.StatusOK},
 		{name: "missing assets", body: `{"tag_name":"v1.2.3","assets":[]}`, code: http.StatusOK},
 		{name: "empty asset name", body: `{"tag_name":"v1.2.3","assets":[{"name":"","browser_download_url":"https://example.com/checksums.txt"}]}`, code: http.StatusOK},
 		{name: "empty asset URL", body: `{"tag_name":"v1.2.3","assets":[{"name":"checksums.txt","browser_download_url":""}]}`, code: http.StatusOK},
@@ -77,6 +91,10 @@ func TestReleaseClientLatestRejectsInvalidResponse(t *testing.T) {
 
 func TestReleaseClientDownload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); got != "mailcheck/v1.2.3" {
+			t.Fatalf("User-Agent = %q, want mailcheck/v1.2.3", got)
+		}
+
 		switch r.URL.Path {
 		case "/small":
 			_, _ = w.Write([]byte("small"))
@@ -88,7 +106,7 @@ func TestReleaseClientDownload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := ReleaseClient{HTTP: server.Client()}
+	client := ReleaseClient{HTTP: server.Client(), UserAgent: "mailcheck/v1.2.3"}
 	got, err := client.Download(context.Background(), server.URL+"/small", int64(len("small")))
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
@@ -120,8 +138,57 @@ func TestReleaseClientDownloadRejectsNonSuccessStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := ReleaseClient{HTTP: server.Client()}
+	client := ReleaseClient{HTTP: server.Client(), UserAgent: "mailcheck/test"}
 	if _, err := client.Download(context.Background(), server.URL, 1024); err == nil {
 		t.Fatal("Download() error = nil, want error")
+	}
+}
+
+func TestReleaseClientRejectsBlankUserAgentWithoutRequest(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch r.URL.Path {
+		case "/latest":
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"checksums.txt","browser_download_url":%q}]}`, serverURL(r))
+		case "/download":
+			_, _ = w.Write([]byte("download"))
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name string
+		call func(ReleaseClient) error
+	}{
+		{
+			name: "latest",
+			call: func(client ReleaseClient) error {
+				_, err := client.Latest(context.Background())
+				return err
+			},
+		},
+		{
+			name: "download",
+			call: func(client ReleaseClient) error {
+				_, err := client.Download(context.Background(), server.URL+"/download", 1024)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests.Store(0)
+			client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL + "/latest"}
+			if err := tt.call(client); err == nil {
+				t.Fatal("request with blank UserAgent error = nil, want error")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
 	}
 }

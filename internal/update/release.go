@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -29,15 +30,17 @@ type ReleaseClient struct {
 
 // Latest retrieves and validates the latest GitHub release metadata.
 func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
+	if c.UserAgent == "" {
+		return Release{}, fmt.Errorf("release client UserAgent is required")
+	}
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.LatestURL, nil)
 	if err != nil {
 		return Release{}, fmt.Errorf("create latest release request: %w", err)
 	}
 	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set("X-GitHub-Api-Version", githubAPIVersionHeader)
-	if c.UserAgent != "" {
-		request.Header.Set("User-Agent", c.UserAgent)
-	}
+	request.Header.Set("User-Agent", c.UserAgent)
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
@@ -59,7 +62,7 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return Release{}, fmt.Errorf("decode latest release: %w", err)
 	}
-	if !ValidVersion(payload.TagName) {
+	if !ValidVersion(payload.TagName) || strings.Contains(strings.SplitN(payload.TagName, "+", 2)[0], "-") {
 		return Release{}, fmt.Errorf("latest release has invalid tag %q", payload.TagName)
 	}
 	if len(payload.Assets) == 0 {
@@ -82,6 +85,9 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 
 // Download retrieves url and rejects a response body larger than maxBytes.
 func (c ReleaseClient) Download(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+	if c.UserAgent == "" {
+		return nil, fmt.Errorf("release client UserAgent is required")
+	}
 	if maxBytes < 0 {
 		return nil, fmt.Errorf("maxBytes must not be negative")
 	}
@@ -90,9 +96,7 @@ func (c ReleaseClient) Download(ctx context.Context, url string, maxBytes int64)
 	if err != nil {
 		return nil, fmt.Errorf("create download request: %w", err)
 	}
-	if c.UserAgent != "" {
-		request.Header.Set("User-Agent", c.UserAgent)
-	}
+	request.Header.Set("User-Agent", c.UserAgent)
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
