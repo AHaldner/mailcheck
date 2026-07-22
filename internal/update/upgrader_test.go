@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -56,6 +57,63 @@ func TestUpgraderRejectsInvalidCurrentVersionBeforeRequest(t *testing.T) {
 	}
 	if replaced {
 		t.Fatal("Replace() called for invalid current version")
+	}
+}
+
+func TestUpgraderRejectsNonStableCurrentVersionBeforeAnyWork(t *testing.T) {
+	archive := upgraderTarGz(t, []byte("new executable"))
+	sum := sha256.Sum256(archive)
+	checksums := []byte(fmt.Sprintf("%x  mailcheck_1.3.0_linux_amd64.tar.gz\n", sum))
+
+	for _, currentVersion := range []string{"v1.3.0-rc.1", "v1.3.0-12-gabcdef-dirty"} {
+		t.Run(currentVersion, func(t *testing.T) {
+			var requests atomic.Int32
+			client := ReleaseClient{
+				HTTP:      &http.Client{},
+				LatestURL: "https://example.com/latest",
+				UserAgent: "mailcheck/test",
+			}
+			client.HTTP.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				requests.Add(1)
+				var body []byte
+				switch request.URL.Path {
+				case "/latest":
+					body = []byte(`{"tag_name":"v1.3.0","assets":[{"name":"mailcheck_1.3.0_linux_amd64.tar.gz","browser_download_url":"https://example.com/archive"},{"name":"checksums.txt","browser_download_url":"https://example.com/checksums.txt"}]}`)
+				case "/archive":
+					body = archive
+				case "/checksums.txt":
+					body = checksums
+				default:
+					t.Fatalf("unexpected request path %q", request.URL.Path)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(body)),
+					Request:    request,
+				}, nil
+			})
+			upgrader := Upgrader{
+				Client: client,
+				GOOS:   "linux",
+				GOARCH: "amd64",
+				ExecutablePath: func() (string, error) {
+					t.Error("ExecutablePath() called for non-stable current version")
+					return "/tmp/mailcheck", nil
+				},
+				Replace: func(string, []byte) error {
+					t.Error("Replace() called for non-stable current version")
+					return nil
+				},
+			}
+
+			_, err := upgrader.Upgrade(context.Background(), currentVersion)
+			if got := requests.Load(); got != 0 {
+				t.Errorf("HTTP requests = %d, want 0", got)
+			}
+			requireErrorContains(t, err, "tagged release build")
+		})
 	}
 }
 
@@ -239,6 +297,12 @@ func upgraderServer(t *testing.T, archive, checksums []byte) *httptest.Server {
 
 func requestURL(r *http.Request, path string) string {
 	return "http://" + r.Host + path
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func upgraderTarGz(t *testing.T, executable []byte) []byte {

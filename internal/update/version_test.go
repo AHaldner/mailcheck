@@ -40,6 +40,29 @@ func TestValidVersion(t *testing.T) {
 	}
 }
 
+func TestStableVersion(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "release", value: "v1.3.0", want: true},
+		{name: "release with build metadata", value: "v1.3.0+packaged", want: true},
+		{name: "pre-release", value: "v1.3.0-rc.1", want: false},
+		{name: "Git describe", value: "v1.3.0-12-gabcdef-dirty", want: false},
+		{name: "pre-release with build metadata", value: "v1.3.0-rc.1+packaged", want: false},
+		{name: "invalid", value: "dev", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StableVersion(tt.value); got != tt.want {
+				t.Fatalf("StableVersion(%q) = %t, want %t", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
 		name        string

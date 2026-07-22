@@ -33,6 +33,39 @@ func TestNoticeCheckerSkipsInvalidCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestNoticeCheckerSkipsNonStableCurrentVersionBeforeCacheOrLatest(t *testing.T) {
+	for _, currentVersion := range []string{"v1.3.0-rc.1", "v1.3.0-12-gabcdef-dirty"} {
+		t.Run(currentVersion, func(t *testing.T) {
+			nowCalls := 0
+			latestCalls := 0
+			checker := NoticeChecker{
+				Now: func() time.Time {
+					nowCalls++
+					return noticeNow
+				},
+				CachePath: filepath.Join(t.TempDir(), "mailcheck", "update.json"),
+				Latest: func(context.Context) (string, error) {
+					latestCalls++
+					return "v1.3.0", nil
+				},
+			}
+
+			if got := checker.Check(context.Background(), currentVersion); got != "" {
+				t.Errorf("Check() = %q, want empty notice", got)
+			}
+			if nowCalls != 0 {
+				t.Errorf("clock reads = %d, want 0 before cache activity", nowCalls)
+			}
+			if latestCalls != 0 {
+				t.Errorf("latest calls = %d, want 0", latestCalls)
+			}
+			if _, err := os.Stat(checker.CachePath); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("cache stat error = %v, want not exist", err)
+			}
+		})
+	}
+}
+
 func TestNoticeCheckerAnnouncesFirstNewerRelease(t *testing.T) {
 	requests := 0
 	checker := testNoticeChecker(t, noticeNow, func(context.Context) (string, error) {

@@ -62,7 +62,7 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return Release{}, fmt.Errorf("decode latest release: %w", err)
 	}
-	if !ValidVersion(payload.TagName) || strings.Contains(strings.SplitN(payload.TagName, "+", 2)[0], "-") {
+	if !StableVersion(payload.TagName) {
 		return Release{}, fmt.Errorf("latest release has invalid tag %q", payload.TagName)
 	}
 	if len(payload.Assets) == 0 {

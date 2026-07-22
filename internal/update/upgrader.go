@@ -49,7 +49,7 @@ func NewUpgrader(currentVersion string) Upgrader {
 // Upgrade installs the latest stable release when it is newer than currentVersion.
 func (u Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, error) {
 	result := Result{From: currentVersion, To: currentVersion}
-	if !ValidVersion(currentVersion) {
+	if !StableVersion(currentVersion) {
 		return result, fmt.Errorf("current version %q is not a tagged release build", currentVersion)
 	}
 

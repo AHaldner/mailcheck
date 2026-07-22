@@ -51,7 +51,7 @@ func NewNoticeChecker(currentVersion string) NoticeChecker {
 // Check returns a one-time notice when a newer release is available.
 // Cache and release lookup failures are intentionally silent.
 func (c NoticeChecker) Check(ctx context.Context, currentVersion string) string {
-	if !ValidVersion(currentVersion) {
+	if !StableVersion(currentVersion) {
 		return ""
 	}
 

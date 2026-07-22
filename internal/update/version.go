@@ -19,6 +19,12 @@ func ValidVersion(value string) bool {
 	return ok
 }
 
+// StableVersion reports whether value is a stable SemVer version with a v prefix.
+func StableVersion(value string) bool {
+	version, ok := parseVersion(value)
+	return ok && len(version.pre) == 0
+}
+
 // CompareVersions compares two SemVer versions with v prefixes. It returns -1
 // when left has lower precedence, 0 when they have equal precedence, and 1
 // when left has higher precedence. Build metadata does not affect precedence.
