@@ -160,8 +160,9 @@ func TestReleaseClientRejectsBlankUserAgentWithoutRequest(t *testing.T) {
 	defer server.Close()
 
 	tests := []struct {
-		name string
-		call func(ReleaseClient) error
+		name      string
+		userAgent string
+		call      func(ReleaseClient) error
 	}{
 		{
 			name: "latest",
@@ -177,14 +178,30 @@ func TestReleaseClientRejectsBlankUserAgentWithoutRequest(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name:      "whitespace latest",
+			userAgent: " \t ",
+			call: func(client ReleaseClient) error {
+				_, err := client.Latest(context.Background())
+				return err
+			},
+		},
+		{
+			name:      "whitespace download",
+			userAgent: " \t ",
+			call: func(client ReleaseClient) error {
+				_, err := client.Download(context.Background(), server.URL+"/download", 1024)
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			requests.Store(0)
-			client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL + "/latest"}
+			client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL + "/latest", UserAgent: tt.userAgent}
 			if err := tt.call(client); err == nil {
-				t.Fatal("request with blank UserAgent error = nil, want error")
+				t.Fatal("request with missing UserAgent error = nil, want error")
 			}
 			if got := requests.Load(); got != 0 {
 				t.Fatalf("requests = %d, want 0", got)

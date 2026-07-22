@@ -30,7 +30,7 @@ type ReleaseClient struct {
 
 // Latest retrieves and validates the latest GitHub release metadata.
 func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
-	if c.UserAgent == "" {
+	if strings.TrimSpace(c.UserAgent) == "" {
 		return Release{}, fmt.Errorf("release client UserAgent is required")
 	}
 
@@ -85,7 +85,7 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 
 // Download retrieves url and rejects a response body larger than maxBytes.
 func (c ReleaseClient) Download(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
-	if c.UserAgent == "" {
+	if strings.TrimSpace(c.UserAgent) == "" {
 		return nil, fmt.Errorf("release client UserAgent is required")
 	}
 	if maxBytes < 0 {
