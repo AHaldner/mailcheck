@@ -1,11 +1,13 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -55,6 +57,20 @@ func TestReleaseClientLatestAllowsBuildMetadata(t *testing.T) {
 	client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL, UserAgent: "mailcheck/test"}
 	if _, err := client.Latest(context.Background()); err != nil {
 		t.Fatalf("Latest() error = %v", err)
+	}
+}
+
+func TestReleaseClientLatestRejectsOversizedMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"checksums.txt","browser_download_url":%q}]}`, serverURL(r))
+		_, _ = w.Write([]byte(strings.Repeat(" ", (1<<20)+1)))
+	}))
+	defer server.Close()
+
+	client := ReleaseClient{HTTP: server.Client(), LatestURL: server.URL, UserAgent: "mailcheck/test"}
+	_, err := client.Latest(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "latest release metadata exceeds maximum size") {
+		t.Fatalf("Latest() error = %v, want metadata size error", err)
 	}
 }
 
@@ -125,6 +141,26 @@ func TestReleaseClientDownload(t *testing.T) {
 
 	if _, err := client.Download(context.Background(), server.URL+"/large", int64(len("small"))); err == nil {
 		t.Fatal("Download() error = nil, want size error")
+	}
+}
+
+func TestReleaseClientDownloadToStreamsIntoWriter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("streamed archive"))
+	}))
+	defer server.Close()
+
+	client := ReleaseClient{HTTP: server.Client(), UserAgent: "mailcheck/test"}
+	var destination bytes.Buffer
+	written, err := client.DownloadTo(context.Background(), server.URL, int64(len("streamed archive")), &destination)
+	if err != nil {
+		t.Fatalf("DownloadTo() error = %v", err)
+	}
+	if written != int64(len("streamed archive")) {
+		t.Fatalf("DownloadTo() bytes = %d, want %d", written, len("streamed archive"))
+	}
+	if got := destination.String(); got != "streamed archive" {
+		t.Fatalf("DownloadTo() destination = %q, want streamed archive", got)
 	}
 }
 

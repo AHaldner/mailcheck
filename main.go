@@ -27,6 +27,10 @@ var checkUpdateNotice = func(ctx context.Context, current string) string {
 	return checker.Check(ctx, current)
 }
 
+var newCheckResolver = func() checkResolver {
+	return dns.NewNetResolver()
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -39,7 +43,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if opts.Upgrade {
-		result, err := upgradeMailcheck(context.Background(), appversion.Current())
+		result, err := upgradeMailcheck(context.Background(), appversion.ReleaseVersion())
 		if err != nil {
 			fmt.Fprintf(stderr, "error: failed to upgrade mailcheck: %v\n", err)
 			return 1
@@ -68,7 +72,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
-	resolver := dns.NewNetResolver()
+	resolver := newCheckResolver()
 	progress := ui.NewProgressWriter(stderr, !opts.JSON && !opts.NoProgress, !opts.NoColor, checkCount(opts))
 
 	runResult := runChecks(ctx, resolver, opts, progress)
@@ -100,7 +104,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if !opts.JSON {
-		if notice := checkUpdateNotice(context.Background(), appversion.Current()); notice != "" {
+		if notice := checkUpdateNotice(context.Background(), appversion.ReleaseVersion()); notice != "" {
 			_, _ = fmt.Fprintln(stderr, notice)
 		}
 	}

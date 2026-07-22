@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const noticeCacheLifetime = 24 * time.Hour
+const (
+	noticeCacheLifetime = 24 * time.Hour
+	noticeLockLease     = 5 * time.Minute
+)
 
 type noticeCache struct {
 	CheckedAt       time.Time `json:"checked_at"`
@@ -55,6 +58,12 @@ func (c NoticeChecker) Check(ctx context.Context, currentVersion string) string 
 		return ""
 	}
 
+	lock, ok := acquireNoticeLock(c.CachePath, time.Now())
+	if !ok {
+		return ""
+	}
+	defer lock.release()
+
 	now := time.Now()
 	if c.Now != nil {
 		now = c.Now()
@@ -66,29 +75,55 @@ func (c NoticeChecker) Check(ctx context.Context, currentVersion string) string 
 
 	state.CheckedAt = now
 	if c.Latest == nil {
-		writeNoticeCache(c.CachePath, state)
+		_ = writeNoticeCache(c.CachePath, state)
 		return ""
 	}
 	latestVersion, err := c.Latest(ctx)
 	if err != nil {
-		writeNoticeCache(c.CachePath, state)
+		_ = writeNoticeCache(c.CachePath, state)
 		return ""
 	}
 
 	comparison, err := CompareVersions(currentVersion, latestVersion)
 	if err != nil {
-		writeNoticeCache(c.CachePath, state)
+		_ = writeNoticeCache(c.CachePath, state)
 		return ""
 	}
 	state.LatestVersion = latestVersion
 	if comparison >= 0 || latestVersion == state.NotifiedVersion {
-		writeNoticeCache(c.CachePath, state)
+		_ = writeNoticeCache(c.CachePath, state)
 		return ""
 	}
 
 	state.NotifiedVersion = latestVersion
-	writeNoticeCache(c.CachePath, state)
+	if err := writeNoticeCache(c.CachePath, state); err != nil {
+		return ""
+	}
 	return fmt.Sprintf(`A new mailcheck version is available: %s (current: %s). Run "mailcheck upgrade".`, latestVersion, currentVersion)
+}
+
+func acquireNoticeLock(cachePath string, now time.Time) (directoryLease, bool) {
+	if cachePath == "" {
+		return directoryLease{}, false
+	}
+
+	directory := filepath.Dir(cachePath)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return directoryLease{}, false
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return directoryLease{}, false
+	}
+
+	return acquireDirectoryLease(cachePath+".lock", now, noticeLockLease)
+}
+
+func noticeLockOwnerName(token string) string {
+	return directoryLeaseOwnerName(token)
+}
+
+func noticeLockStaleName(token string) string {
+	return directoryLeaseStaleName(token)
 }
 
 func readNoticeCache(path string) (noticeCache, error) {
@@ -106,21 +141,21 @@ func readNoticeCache(path string) (noticeCache, error) {
 	return state, nil
 }
 
-func writeNoticeCache(path string, state noticeCache) {
+func writeNoticeCache(path string, state noticeCache) error {
 	if path == "" {
-		return
+		return os.ErrInvalid
 	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return
+		return err
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
-		return
+		return err
 	}
 
 	temporary, err := os.CreateTemp(directory, ".mailcheck-update-*")
 	if err != nil {
-		return
+		return err
 	}
 	temporaryPath := temporary.Name()
 	closed := false
@@ -132,18 +167,18 @@ func writeNoticeCache(path string, state noticeCache) {
 	}()
 
 	if err := temporary.Chmod(0o600); err != nil {
-		return
+		return err
 	}
 	if err := json.NewEncoder(temporary).Encode(state); err != nil {
-		return
+		return err
 	}
 	if err := temporary.Sync(); err != nil {
-		return
+		return err
 	}
 	if err := temporary.Close(); err != nil {
 		closed = true
-		return
+		return err
 	}
 	closed = true
-	_ = os.Rename(temporaryPath, path)
+	return os.Rename(temporaryPath, path)
 }

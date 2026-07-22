@@ -14,9 +14,25 @@ import (
 )
 
 const (
-	maxArchiveBytes    = 100 << 20
-	maxExecutableBytes = 64 << 20
+	maxArchiveBytes         = 100 << 20
+	maxExecutableBytes      = 64 << 20
+	maxDecompressedTarBytes = 128 << 20
+	maxArchiveEntries       = 1024
 )
+
+type extractionLimits struct {
+	maxArchiveBytes         int64
+	maxExecutableBytes      int64
+	maxDecompressedTarBytes int64
+	maxEntries              int
+}
+
+var productionExtractionLimits = extractionLimits{
+	maxArchiveBytes:         maxArchiveBytes,
+	maxExecutableBytes:      maxExecutableBytes,
+	maxDecompressedTarBytes: maxDecompressedTarBytes,
+	maxEntries:              maxArchiveEntries,
+}
 
 // AssetName returns the GoReleaser archive name for a supported platform.
 func AssetName(version, goos, goarch string) (string, error) {
@@ -41,6 +57,10 @@ func AssetName(version, goos, goarch string) (string, error) {
 
 // VerifyChecksum verifies archive against its exact entry in checksums.
 func VerifyChecksum(name string, archive, checksums []byte) error {
+	return verifyChecksumReader(name, bytes.NewReader(archive), checksums)
+}
+
+func verifyChecksumReader(name string, archive io.Reader, checksums []byte) error {
 	var expected []byte
 	for _, line := range strings.Split(string(checksums), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -69,8 +89,11 @@ func VerifyChecksum(name string, archive, checksums []byte) error {
 	if expected == nil {
 		return fmt.Errorf("checksum for %q not found", name)
 	}
-	actual := sha256.Sum256(archive)
-	if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, archive); err != nil {
+		return fmt.Errorf("read archive for checksum: %w", err)
+	}
+	if subtle.ConstantTimeCompare(hash.Sum(nil), expected) != 1 {
 		return fmt.Errorf("checksum mismatch for %q", name)
 	}
 	return nil
@@ -78,111 +101,143 @@ func VerifyChecksum(name string, archive, checksums []byte) error {
 
 // ExtractExecutable returns the exact executable entry from a verified release archive.
 func ExtractExecutable(name string, archive []byte) ([]byte, error) {
-	if len(archive) > maxArchiveBytes {
-		return nil, fmt.Errorf("archive exceeds maximum size of %d bytes", maxArchiveBytes)
+	var executable bytes.Buffer
+	err := extractExecutableTo(name, bytes.NewReader(archive), int64(len(archive)), &executable, productionExtractionLimits)
+	if err != nil {
+		return nil, err
+	}
+	return executable.Bytes(), nil
+}
+
+func extractExecutableTo(name string, archive io.ReaderAt, archiveSize int64, destination io.Writer, limits extractionLimits) error {
+	if archiveSize > limits.maxArchiveBytes {
+		return fmt.Errorf("archive exceeds maximum size of %d bytes", limits.maxArchiveBytes)
+	}
+	if archiveSize < 0 {
+		return fmt.Errorf("archive size must not be negative")
 	}
 
 	switch {
 	case strings.HasSuffix(name, ".tar.gz"):
-		return extractTarGzExecutable(archive, "mailcheck")
+		return extractTarGzExecutableTo(io.NewSectionReader(archive, 0, archiveSize), destination, "mailcheck", limits)
 	case strings.HasSuffix(name, ".zip"):
-		return extractZipExecutable(archive, "mailcheck.exe")
+		return extractZipExecutableTo(archive, archiveSize, destination, "mailcheck.exe", limits)
 	default:
-		return nil, fmt.Errorf("unsupported archive extension for %q", name)
+		return fmt.Errorf("unsupported archive extension for %q", name)
 	}
 }
 
-func extractTarGzExecutable(archive []byte, executableName string) ([]byte, error) {
-	gzipReader, err := gzip.NewReader(bytes.NewReader(archive))
+func extractTarGzExecutableTo(archive io.Reader, destination io.Writer, executableName string, limits extractionLimits) error {
+	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
-		return nil, fmt.Errorf("open tar.gz archive: %w", err)
+		return fmt.Errorf("open tar.gz archive: %w", err)
 	}
 	defer gzipReader.Close()
 
-	tarReader := tar.NewReader(gzipReader)
-	var executable []byte
+	decompressed := &io.LimitedReader{R: gzipReader, N: limits.maxDecompressedTarBytes + 1}
+	tarReader := tar.NewReader(decompressed)
+	found := false
+	entries := 0
 	for {
 		header, err := tarReader.Next()
+		if decompressed.N == 0 {
+			return fmt.Errorf("tar archive exceeds maximum decompressed size of %d bytes", limits.maxDecompressedTarBytes)
+		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read tar archive: %w", err)
+			return fmt.Errorf("read tar archive: %w", err)
+		}
+		entries++
+		if entries > limits.maxEntries {
+			return fmt.Errorf("tar archive exceeds maximum entry count of %d", limits.maxEntries)
 		}
 		if header.Name != executableName {
 			continue
 		}
-		if executable != nil {
-			return nil, fmt.Errorf("archive contains duplicate executable entry %q", executableName)
+		if found {
+			return fmt.Errorf("archive contains duplicate executable entry %q", executableName)
 		}
 
-		executable, err = readExecutable(tarReader, header.Size, executableName)
+		err = copyExecutable(destination, tarReader, header.Size, executableName, limits.maxExecutableBytes)
+		if decompressed.N == 0 {
+			return fmt.Errorf("tar archive exceeds maximum decompressed size of %d bytes", limits.maxDecompressedTarBytes)
+		}
 		if err != nil {
-			return nil, err
+			return err
 		}
+		found = true
 	}
 
-	if executable == nil {
-		return nil, fmt.Errorf("executable entry %q not found", executableName)
+	if !found {
+		return fmt.Errorf("executable entry %q not found", executableName)
 	}
-	return executable, nil
+	return nil
 }
 
-func extractZipExecutable(archive []byte, executableName string) ([]byte, error) {
-	zipReader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+func extractZipExecutableTo(archive io.ReaderAt, archiveSize int64, destination io.Writer, executableName string, limits extractionLimits) error {
+	zipReader, err := zip.NewReader(archive, archiveSize)
 	if err != nil {
-		return nil, fmt.Errorf("open zip archive: %w", err)
+		return fmt.Errorf("open zip archive: %w", err)
+	}
+	if len(zipReader.File) > limits.maxEntries {
+		return fmt.Errorf("zip archive exceeds maximum entry count of %d", limits.maxEntries)
 	}
 
-	var executable []byte
+	found := false
 	for _, file := range zipReader.File {
 		if file.Name != executableName {
 			continue
 		}
-		if executable != nil {
-			return nil, fmt.Errorf("archive contains duplicate executable entry %q", executableName)
+		if found {
+			return fmt.Errorf("archive contains duplicate executable entry %q", executableName)
 		}
-		if file.UncompressedSize64 > maxExecutableBytes {
-			return nil, fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", executableName, maxExecutableBytes)
+		if file.UncompressedSize64 > uint64(limits.maxExecutableBytes) {
+			return fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", executableName, limits.maxExecutableBytes)
 		}
 
 		entry, err := file.Open()
 		if err != nil {
-			return nil, fmt.Errorf("open executable entry %q: %w", executableName, err)
+			return fmt.Errorf("open executable entry %q: %w", executableName, err)
 		}
-		executable, err = readExecutable(entry, int64(file.UncompressedSize64), executableName)
+		err = copyExecutable(destination, entry, int64(file.UncompressedSize64), executableName, limits.maxExecutableBytes)
 		closeErr := entry.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if closeErr != nil {
-			return nil, fmt.Errorf("close executable entry %q: %w", executableName, closeErr)
+			return fmt.Errorf("close executable entry %q: %w", executableName, closeErr)
 		}
+		found = true
 	}
 
-	if executable == nil {
-		return nil, fmt.Errorf("executable entry %q not found", executableName)
+	if !found {
+		return fmt.Errorf("executable entry %q not found", executableName)
 	}
-	return executable, nil
+	return nil
 }
 
-func readExecutable(reader io.Reader, size int64, name string) ([]byte, error) {
+func copyExecutable(destination io.Writer, reader io.Reader, size int64, name string, maxBytes int64) error {
 	if size <= 0 {
-		return nil, fmt.Errorf("executable entry %q is empty", name)
+		return fmt.Errorf("executable entry %q is empty", name)
 	}
-	if size > maxExecutableBytes {
-		return nil, fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", name, maxExecutableBytes)
+	if size > maxBytes {
+		return fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", name, maxBytes)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(reader, maxExecutableBytes+1))
+	written, err := io.Copy(destination, io.LimitReader(reader, maxBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read executable entry %q: %w", name, err)
+		return fmt.Errorf("copy executable entry %q: %w", name, err)
 	}
-	if len(data) == 0 {
-		return nil, fmt.Errorf("executable entry %q is empty", name)
+	if written == 0 {
+		return fmt.Errorf("executable entry %q is empty", name)
 	}
-	if len(data) > maxExecutableBytes {
-		return nil, fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", name, maxExecutableBytes)
+	if written > maxBytes {
+		return fmt.Errorf("executable entry %q exceeds maximum size of %d bytes", name, maxBytes)
 	}
-	return data, nil
+	if written != size {
+		return fmt.Errorf("executable entry %q size mismatch: copied %d bytes, expected %d", name, written, size)
+	}
+	return nil
 }

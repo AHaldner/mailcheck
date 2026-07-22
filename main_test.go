@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -82,6 +83,26 @@ func TestRunUpgrade(t *testing.T) {
 	}
 }
 
+func TestRunUpgradeUsesReleaseVersionProvenance(t *testing.T) {
+	setDevelopmentVersionWithAmbientTag(t, "v1.2.3")
+
+	oldUpgrade := upgradeMailcheck
+	t.Cleanup(func() { upgradeMailcheck = oldUpgrade })
+	var gotCurrent string
+	upgradeMailcheck = func(_ context.Context, current string) (update.Result, error) {
+		gotCurrent = current
+		return update.Result{From: current, To: current}, nil
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	_ = run([]string{"upgrade"}, &stdout, &stderr)
+
+	if gotCurrent != "dev" {
+		t.Fatalf("upgrade current = %q, want development provenance", gotCurrent)
+	}
+}
+
 func TestRunUpdateNoticeAfterFailingTextReport(t *testing.T) {
 	oldVersion := appversion.Value
 	appversion.Value = "v1.2.3"
@@ -117,6 +138,79 @@ func TestRunUpdateNoticeAfterFailingTextReport(t *testing.T) {
 	}
 	if got := stderr.String(); got != notice+"\n" {
 		t.Fatalf("stderr = %q, want %q", got, notice+"\n")
+	}
+}
+
+func TestRunUpdateNoticeDoesNotChangeSuccessfulTextExitCode(t *testing.T) {
+	oldResolver := newCheckResolver
+	newCheckResolver = func() checkResolver { return mainFakeResolver{} }
+	t.Cleanup(func() { newCheckResolver = oldResolver })
+
+	oldCheck := checkUpdateNotice
+	t.Cleanup(func() { checkUpdateNotice = oldCheck })
+	const notice = `A new mailcheck version is available: v1.3.0 (current: v1.2.3). Run "mailcheck upgrade".`
+	checkUpdateNotice = func(context.Context, string) string { return notice }
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	code := run([]string{"example.com", "--no-progress", "--no-color"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() code = %d, want 0", code)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("run() wrote no text report")
+	}
+	if got := stderr.String(); got != notice+"\n" {
+		t.Fatalf("stderr = %q, want %q", got, notice+"\n")
+	}
+}
+
+func TestRunReportWriterFailureSkipsUpdateNotice(t *testing.T) {
+	oldResolver := newCheckResolver
+	newCheckResolver = func() checkResolver { return mainFakeResolver{} }
+	t.Cleanup(func() { newCheckResolver = oldResolver })
+
+	oldCheck := checkUpdateNotice
+	t.Cleanup(func() { checkUpdateNotice = oldCheck })
+	noticeCalls := 0
+	checkUpdateNotice = func(context.Context, string) string {
+		noticeCalls++
+		return "unexpected notice"
+	}
+
+	writeErr := errors.New("injected report writer failure")
+	var stderr strings.Builder
+	code := run([]string{"example.com", "--no-progress", "--no-color"}, errorWriter{err: writeErr}, &stderr)
+
+	if code != 1 {
+		t.Fatalf("run() code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "failed to write report: injected report writer failure") {
+		t.Fatalf("stderr = %q, want report writer failure", stderr.String())
+	}
+	if noticeCalls != 0 {
+		t.Fatalf("notice checker calls = %d, want 0", noticeCalls)
+	}
+}
+
+func TestRunUpdateNoticeUsesReleaseVersionProvenance(t *testing.T) {
+	setDevelopmentVersionWithAmbientTag(t, "v1.2.3")
+
+	oldCheck := checkUpdateNotice
+	t.Cleanup(func() { checkUpdateNotice = oldCheck })
+	var gotCurrent string
+	checkUpdateNotice = func(_ context.Context, current string) string {
+		gotCurrent = current
+		return ""
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	_ = run([]string{"example.com", "--timeout", "1ns", "--no-progress", "--no-color"}, &stdout, &stderr)
+
+	if gotCurrent != "dev" {
+		t.Fatalf("notice current = %q, want development provenance", gotCurrent)
 	}
 }
 
@@ -458,6 +552,31 @@ func allStarted(started map[string]bool) bool {
 }
 
 type mainFakeResolver struct{}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func setDevelopmentVersionWithAmbientTag(t *testing.T, tag string) {
+	t.Helper()
+	oldValue := appversion.Value
+	oldGitDescribe := appversion.GitDescribe
+	oldReadBuildInfo := appversion.ReadBuildInfo
+	appversion.Value = "dev"
+	appversion.GitDescribe = func() string { return tag }
+	appversion.ReadBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+	t.Cleanup(func() {
+		appversion.Value = oldValue
+		appversion.GitDescribe = oldGitDescribe
+		appversion.ReadBuildInfo = oldReadBuildInfo
+	})
+}
 
 type dkimDeadlineResolver struct {
 	mainFakeResolver

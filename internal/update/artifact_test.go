@@ -63,6 +63,17 @@ func TestVerifyChecksum(t *testing.T) {
 	}
 }
 
+func TestVerifyChecksumReader(t *testing.T) {
+	const archive = "release archive streamed from disk"
+	const name = "mailcheck_1.2.3_linux_amd64.tar.gz"
+	sum := sha256.Sum256([]byte(archive))
+	checksums := []byte(fmt.Sprintf("%x  %s\n", sum, name))
+
+	if err := verifyChecksumReader(name, strings.NewReader(archive), checksums); err != nil {
+		t.Fatalf("verifyChecksumReader() error = %v", err)
+	}
+}
+
 func TestVerifyChecksumRejectsDuplicateEntry(t *testing.T) {
 	const name = "mailcheck_1.2.3_linux_amd64.tar.gz"
 	archive := []byte("release archive")
@@ -271,6 +282,71 @@ func TestExtractExecutableRejectsOversizedArchive(t *testing.T) {
 	if _, err := ExtractExecutable("mailcheck_1.2.3_linux_amd64.tar.gz", archive); err == nil {
 		t.Fatal("ExtractExecutable() error = nil, want error")
 	}
+}
+
+func TestExtractExecutableToRejectsExcessIrrelevantTarData(t *testing.T) {
+	archive := tarGz(t,
+		archiveFile{name: "README.md", data: make([]byte, 2<<10)},
+		archiveFile{name: "mailcheck", data: []byte("executable")},
+	)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_linux_amd64.tar.gz",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		extractionLimits{
+			maxArchiveBytes:         1 << 20,
+			maxExecutableBytes:      1 << 10,
+			maxDecompressedTarBytes: 1 << 10,
+			maxEntries:              10,
+		},
+	)
+	requireErrorContains(t, err, "tar archive exceeds maximum decompressed size")
+}
+
+func TestExtractExecutableToRejectsTooManyTarEntries(t *testing.T) {
+	archive := tarGz(t,
+		archiveFile{name: "mailcheck", data: []byte("executable")},
+		archiveFile{name: "README.md", data: []byte("one")},
+		archiveFile{name: "LICENSE", data: []byte("two")},
+	)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_linux_amd64.tar.gz",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		extractionLimits{
+			maxArchiveBytes:         1 << 20,
+			maxExecutableBytes:      1 << 10,
+			maxDecompressedTarBytes: 1 << 20,
+			maxEntries:              2,
+		},
+	)
+	requireErrorContains(t, err, "tar archive exceeds maximum entry count")
+}
+
+func TestExtractExecutableToRejectsTooManyZipEntries(t *testing.T) {
+	archive := zipFile(t,
+		archiveFile{name: "mailcheck.exe", data: []byte("executable")},
+		archiveFile{name: "README.md", data: []byte("one")},
+		archiveFile{name: "LICENSE", data: []byte("two")},
+	)
+	var destination bytes.Buffer
+	err := extractExecutableTo(
+		"mailcheck_1.2.3_windows_amd64.zip",
+		bytes.NewReader(archive),
+		int64(len(archive)),
+		&destination,
+		extractionLimits{
+			maxArchiveBytes:         1 << 20,
+			maxExecutableBytes:      1 << 10,
+			maxDecompressedTarBytes: 1 << 20,
+			maxEntries:              2,
+		},
+	)
+	requireErrorContains(t, err, "zip archive exceeds maximum entry count")
 }
 
 func requireErrorContains(t *testing.T, err error, want string) {

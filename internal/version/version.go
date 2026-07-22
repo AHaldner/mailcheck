@@ -8,6 +8,8 @@ import (
 
 var Value = "dev"
 
+var ReadBuildInfo = debug.ReadBuildInfo
+
 var GitDescribe = func() string {
 	output, err := exec.Command("git", "describe", "--tags", "--dirty", "--always").Output()
 	if err != nil {
@@ -26,7 +28,22 @@ func Current() string {
 		return described
 	}
 
-	info, ok := debug.ReadBuildInfo()
+	info, ok := ReadBuildInfo()
+	if ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	return Value
+}
+
+// ReleaseVersion returns only version information embedded in the binary.
+// Unlike Current, it never consults the ambient Git repository.
+func ReleaseVersion() string {
+	if Value != "" && Value != "dev" {
+		return Value
+	}
+
+	info, ok := ReadBuildInfo()
 	if ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}

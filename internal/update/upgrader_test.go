@@ -6,10 +6,13 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -32,7 +35,7 @@ func TestUpgraderConstructorUsesProductionDefaults(t *testing.T) {
 	if upgrader.GOOS != runtime.GOOS || upgrader.GOARCH != runtime.GOARCH {
 		t.Fatalf("platform = %s/%s, want %s/%s", upgrader.GOOS, upgrader.GOARCH, runtime.GOOS, runtime.GOARCH)
 	}
-	if upgrader.ExecutablePath == nil || upgrader.Replace == nil {
+	if upgrader.DownloadArchive == nil || upgrader.ExecutablePath == nil || upgrader.Replace == nil {
 		t.Fatal("production executable path and replacement functions must be configured")
 	}
 }
@@ -45,7 +48,7 @@ func TestUpgraderRejectsInvalidCurrentVersionBeforeRequest(t *testing.T) {
 	defer server.Close()
 
 	replaced := false
-	upgrader := testUpgrader(server, func(string, []byte) error {
+	upgrader := testUpgrader(server, func(string, io.Reader) error {
 		replaced = true
 		return nil
 	})
@@ -102,7 +105,7 @@ func TestUpgraderRejectsNonStableCurrentVersionBeforeAnyWork(t *testing.T) {
 					t.Error("ExecutablePath() called for non-stable current version")
 					return "/tmp/mailcheck", nil
 				},
-				Replace: func(string, []byte) error {
+				Replace: func(string, io.Reader) error {
 					t.Error("Replace() called for non-stable current version")
 					return nil
 				},
@@ -142,7 +145,7 @@ func TestUpgraderDoesNotDownloadOrReplaceWhenCurrentIsEqualOrNewer(t *testing.T)
 			defer server.Close()
 
 			replaced := false
-			upgrader := testUpgrader(server, func(string, []byte) error {
+			upgrader := testUpgrader(server, func(string, io.Reader) error {
 				replaced = true
 				return nil
 			})
@@ -194,7 +197,7 @@ func TestUpgraderRequiresArchiveAndChecksumsAssets(t *testing.T) {
 			defer server.Close()
 
 			replaced := false
-			upgrader := testUpgrader(server, func(string, []byte) error {
+			upgrader := testUpgrader(server, func(string, io.Reader) error {
 				replaced = true
 				return nil
 			})
@@ -216,7 +219,7 @@ func TestUpgraderDoesNotReplaceOnChecksumFailure(t *testing.T) {
 	server := upgraderServer(t, archive, []byte(strings.Repeat("0", 64)+"  mailcheck_1.3.0_linux_amd64.tar.gz\n"))
 
 	replaced := false
-	upgrader := testUpgrader(server, func(string, []byte) error {
+	upgrader := testUpgrader(server, func(string, io.Reader) error {
 		replaced = true
 		return nil
 	})
@@ -241,10 +244,11 @@ func TestUpgraderInstallsVerifiedNewerRelease(t *testing.T) {
 
 	var gotPath string
 	var gotExecutable []byte
-	upgrader := testUpgrader(server, func(path string, binary []byte) error {
+	upgrader := testUpgrader(server, func(path string, source io.Reader) error {
 		gotPath = path
-		gotExecutable = bytes.Clone(binary)
-		return nil
+		var err error
+		gotExecutable, err = io.ReadAll(source)
+		return err
 	})
 
 	result, err := upgrader.Upgrade(context.Background(), "v1.2.3")
@@ -262,7 +266,110 @@ func TestUpgraderInstallsVerifiedNewerRelease(t *testing.T) {
 	}
 }
 
-func testUpgrader(server *httptest.Server, replace func(string, []byte) error) Upgrader {
+func TestUpgraderStreamsThroughTemporaryFilesAndCleansThem(t *testing.T) {
+	validArchive := upgraderTarGz(t, []byte("new executable"))
+	invalidArchive := []byte("not a tar.gz archive")
+	replacementErr := errors.New("injected replacement failure")
+
+	tests := []struct {
+		name       string
+		archive    []byte
+		checksumOK bool
+		replaceErr error
+		wantErr    string
+	}{
+		{name: "success", archive: validArchive, checksumOK: true},
+		{name: "checksum failure", archive: validArchive, wantErr: "checksum mismatch"},
+		{name: "extraction failure", archive: invalidArchive, checksumOK: true, wantErr: "open tar.gz archive"},
+		{name: "replacement failure", archive: validArchive, checksumOK: true, replaceErr: replacementErr, wantErr: "replacement failure"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDirectory := t.TempDir()
+			sum := sha256.Sum256(tt.archive)
+			if !tt.checksumOK {
+				sum = sha256.Sum256([]byte("different archive"))
+			}
+			checksums := []byte(fmt.Sprintf("%x  mailcheck_1.3.0_linux_amd64.tar.gz\n", sum))
+			server := upgraderServer(t, tt.archive, checksums)
+
+			downloadCalls := 0
+			replaceCalls := 0
+			upgrader := Upgrader{
+				Client: ReleaseClient{
+					HTTP:      server.Client(),
+					LatestURL: server.URL + "/latest",
+					UserAgent: "mailcheck/test",
+				},
+				GOOS:    "linux",
+				GOARCH:  "amd64",
+				TempDir: tempDirectory,
+				DownloadArchive: func(_ context.Context, _ string, limit int64, destination io.Writer) (int64, error) {
+					downloadCalls++
+					if limit != maxArchiveBytes {
+						t.Errorf("archive limit = %d, want %d", limit, maxArchiveBytes)
+					}
+					file, ok := destination.(*os.File)
+					if !ok {
+						t.Errorf("archive destination = %T, want *os.File", destination)
+					} else if filepath.Dir(file.Name()) != tempDirectory {
+						t.Errorf("archive temporary directory = %q, want %q", filepath.Dir(file.Name()), tempDirectory)
+					}
+					return io.Copy(destination, bytes.NewReader(tt.archive))
+				},
+				ExecutablePath: func() (string, error) { return "/tmp/mailcheck", nil },
+				Replace: func(path string, source io.Reader) error {
+					replaceCalls++
+					if path != "/tmp/mailcheck" {
+						t.Errorf("replacement path = %q, want /tmp/mailcheck", path)
+					}
+					file, ok := source.(*os.File)
+					if !ok {
+						t.Errorf("replacement source = %T, want *os.File", source)
+					} else if filepath.Dir(file.Name()) != tempDirectory {
+						t.Errorf("executable temporary directory = %q, want %q", filepath.Dir(file.Name()), tempDirectory)
+					}
+					got, err := io.ReadAll(source)
+					if err != nil {
+						return err
+					}
+					if !bytes.Equal(got, []byte("new executable")) {
+						t.Errorf("replacement source = %q, want new executable", got)
+					}
+					return tt.replaceErr
+				},
+			}
+
+			_, err := upgrader.Upgrade(context.Background(), "v1.2.3")
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("Upgrade() error = %v", err)
+			}
+			if tt.wantErr != "" {
+				requireErrorContains(t, err, tt.wantErr)
+			}
+			if downloadCalls != 1 {
+				t.Fatalf("streaming archive downloads = %d, want 1", downloadCalls)
+			}
+			wantReplaceCalls := 0
+			if tt.name == "success" || tt.name == "replacement failure" {
+				wantReplaceCalls = 1
+			}
+			if replaceCalls != wantReplaceCalls {
+				t.Fatalf("replacement calls = %d, want %d", replaceCalls, wantReplaceCalls)
+			}
+			entries, readErr := os.ReadDir(tempDirectory)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("temporary artifacts remain: %v", entries)
+			}
+		})
+	}
+}
+
+func testUpgrader(server *httptest.Server, replace func(string, io.Reader) error) Upgrader {
 	return Upgrader{
 		Client: ReleaseClient{
 			HTTP:      server.Client(),

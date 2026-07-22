@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,8 +12,9 @@ import (
 )
 
 const (
-	githubAcceptHeader     = "application/vnd.github+json"
-	githubAPIVersionHeader = "2022-11-28"
+	githubAcceptHeader            = "application/vnd.github+json"
+	githubAPIVersionHeader        = "2022-11-28"
+	maxLatestReleaseMetadataBytes = 1 << 20
 )
 
 // Release is the metadata needed to install a published release.
@@ -59,7 +61,14 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 			BrowserDownloadURL string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	metadata, err := io.ReadAll(io.LimitReader(response.Body, maxLatestReleaseMetadataBytes+1))
+	if err != nil {
+		return Release{}, fmt.Errorf("read latest release metadata: %w", err)
+	}
+	if len(metadata) > maxLatestReleaseMetadataBytes {
+		return Release{}, fmt.Errorf("latest release metadata exceeds maximum size of %d bytes", maxLatestReleaseMetadataBytes)
+	}
+	if err := json.Unmarshal(metadata, &payload); err != nil {
 		return Release{}, fmt.Errorf("decode latest release: %w", err)
 	}
 	if !StableVersion(payload.TagName) {
@@ -85,42 +94,52 @@ func (c ReleaseClient) Latest(ctx context.Context) (Release, error) {
 
 // Download retrieves url and rejects a response body larger than maxBytes.
 func (c ReleaseClient) Download(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+	var body bytes.Buffer
+	if _, err := c.DownloadTo(ctx, url, maxBytes, &body); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
+}
+
+// DownloadTo streams url into destination and rejects a response body larger
+// than maxBytes.
+func (c ReleaseClient) DownloadTo(ctx context.Context, url string, maxBytes int64, destination io.Writer) (int64, error) {
 	if strings.TrimSpace(c.UserAgent) == "" {
-		return nil, fmt.Errorf("release client UserAgent is required")
+		return 0, fmt.Errorf("release client UserAgent is required")
 	}
 	if maxBytes < 0 {
-		return nil, fmt.Errorf("maxBytes must not be negative")
+		return 0, fmt.Errorf("maxBytes must not be negative")
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create download request: %w", err)
+		return 0, fmt.Errorf("create download request: %w", err)
 	}
 	request.Header.Set("User-Agent", c.UserAgent)
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("download: %w", err)
+		return 0, fmt.Errorf("download: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("download: unexpected HTTP status %s", response.Status)
+		return 0, fmt.Errorf("download: unexpected HTTP status %s", response.Status)
 	}
 
 	limit := maxBytes
 	if maxBytes < math.MaxInt64 {
 		limit++
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, limit))
+	written, err := io.Copy(destination, io.LimitReader(response.Body, limit))
 	if err != nil {
-		return nil, fmt.Errorf("read download: %w", err)
+		return written, fmt.Errorf("write download: %w", err)
 	}
-	if int64(len(body)) > maxBytes {
-		return nil, fmt.Errorf("download exceeds maximum size of %d bytes", maxBytes)
+	if written > maxBytes {
+		return written, fmt.Errorf("download exceeds maximum size of %d bytes", maxBytes)
 	}
 
-	return body, nil
+	return written, nil
 }
 
 func (c ReleaseClient) httpClient() *http.Client {
