@@ -12,7 +12,15 @@ import (
 	"github.com/AHaldner/mailcheck/internal/help"
 )
 
-const DefaultTimeout = 30 * time.Second
+const (
+	DefaultTimeout = 30 * time.Second
+	commandHelp    = `Usage: mailcheck upgrade
+
+Commands:
+  upgrade             install the latest stable release
+
+`
+)
 
 type Options struct {
 	Domain     string
@@ -26,6 +34,7 @@ type Options struct {
 	DeepDKIM   bool
 	Version    bool
 	Help       bool
+	Upgrade    bool
 	Timeout    time.Duration
 }
 
@@ -121,10 +130,17 @@ func Help() string {
 	for _, definition := range flagDefinitions {
 		flags = append(flags, definition.help)
 	}
-	return help.Format("mailcheck", "domain.example", flags)
+	return commandHelp + help.Format("mailcheck", "domain.example", flags)
 }
 
 func ParseArgs(args []string, stderr io.Writer) (Options, error) {
+	if len(args) > 0 && args[0] == "upgrade" {
+		if len(args) != 1 {
+			return Options{}, errors.New("upgrade does not accept arguments")
+		}
+		return Options{Upgrade: true}, nil
+	}
+
 	var opts Options
 	var selectors selectorFlags
 	normalized, err := normalizeArgs(args)

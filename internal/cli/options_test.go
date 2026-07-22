@@ -76,6 +76,30 @@ func TestParseArgsSupportsNoCache(t *testing.T) {
 	}
 }
 
+func TestParseArgsSupportsUpgradeWithoutDomain(t *testing.T) {
+	got, err := ParseArgs([]string{"upgrade"}, io.Discard)
+	if err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+	if !got.Upgrade {
+		t.Fatal("Upgrade = false, want true")
+	}
+}
+
+func TestParseArgsRejectsUpgradeArguments(t *testing.T) {
+	_, err := ParseArgs([]string{"upgrade", "example.com"}, io.Discard)
+	if err == nil || err.Error() != "upgrade does not accept arguments" {
+		t.Fatalf("ParseArgs() error = %v", err)
+	}
+}
+
+func TestHelpIncludesUpgradeCommand(t *testing.T) {
+	if !strings.Contains(Help(), "Usage: mailcheck upgrade") ||
+		!strings.Contains(Help(), "upgrade             install the latest stable release") {
+		t.Fatalf("Help() missing upgrade command:\n%s", Help())
+	}
+}
+
 func TestRegisterFlagDefinitionsUsesDeclarativeBoolTarget(t *testing.T) {
 	definitions := []flagDefinition{
 		{
@@ -111,7 +135,12 @@ func TestRegisterFlagDefinitionsUsesProvidedDefinitionsOnly(t *testing.T) {
 }
 
 func TestHelpMatchesCurrentOutput(t *testing.T) {
-	want := `Usage: mailcheck [--version] | [--help] | [--selector name] [--advanced] [--details] [--dkim-deep] [--json] [--no-cache] [--no-color] [--no-progress] [--timeout 30s] domain.example
+	want := `Usage: mailcheck upgrade
+
+Commands:
+  upgrade             install the latest stable release
+
+Usage: mailcheck [--version] | [--help] | [--selector name] [--advanced] [--details] [--dkim-deep] [--json] [--no-cache] [--no-color] [--no-progress] [--timeout 30s] domain.example
 
 Flags:
   --selector <name>   additional DKIM selector to try
