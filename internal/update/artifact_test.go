@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -36,18 +37,18 @@ func TestAssetName(t *testing.T) {
 
 func TestAssetNameRejectsUnsupportedPlatformOrArchitecture(t *testing.T) {
 	tests := []struct {
-		goos   string
-		goarch string
+		goos      string
+		goarch    string
+		wantError string
 	}{
-		{goos: "freebsd", goarch: "amd64"},
-		{goos: "linux", goarch: "386"},
+		{goos: "freebsd", goarch: "amd64", wantError: "unsupported platform"},
+		{goos: "linux", goarch: "386", wantError: "unsupported architecture"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.goos+"/"+test.goarch, func(t *testing.T) {
-			if _, err := AssetName("v1.2.3", test.goos, test.goarch); err == nil {
-				t.Fatal("AssetName() error = nil, want error")
-			}
+			_, err := AssetName("v1.2.3", test.goos, test.goarch)
+			requireErrorContains(t, err, test.wantError)
 		})
 	}
 }
@@ -60,6 +61,16 @@ func TestVerifyChecksum(t *testing.T) {
 	if err := VerifyChecksum("mailcheck_1.2.3_linux_amd64.tar.gz", archive, checksums); err != nil {
 		t.Fatalf("VerifyChecksum() error = %v", err)
 	}
+}
+
+func TestVerifyChecksumRejectsDuplicateEntry(t *testing.T) {
+	const name = "mailcheck_1.2.3_linux_amd64.tar.gz"
+	archive := []byte("release archive")
+	sum := sha256.Sum256(archive)
+	checksums := []byte(fmt.Sprintf("%x  %s\n%x  *%s\n", sum, name, sum, name))
+
+	err := VerifyChecksum(name, archive, checksums)
+	requireErrorContains(t, err, "duplicate checksum entry")
 }
 
 func TestVerifyChecksumRejectsInvalidChecksums(t *testing.T) {
@@ -157,6 +168,7 @@ func TestExtractExecutableRejectsInvalidArchives(t *testing.T) {
 		name    string
 		asset   string
 		archive []byte
+		wantErr string
 	}{
 		{
 			name:    "duplicate tar entries",
@@ -192,15 +204,65 @@ func TestExtractExecutableRejectsInvalidArchives(t *testing.T) {
 			name:    "unsupported extension",
 			asset:   "mailcheck_1.2.3_linux_amd64.unknown",
 			archive: []byte("not an archive"),
+			wantErr: "unsupported archive extension",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := ExtractExecutable(test.asset, test.archive); err == nil {
+			_, err := ExtractExecutable(test.asset, test.archive)
+			if test.wantErr != "" {
+				requireErrorContains(t, err, test.wantErr)
+				return
+			}
+			if err == nil {
 				t.Fatal("ExtractExecutable() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestExtractExecutableRejectsInvalidZipArchives(t *testing.T) {
+	tests := []struct {
+		name    string
+		archive []byte
+	}{
+		{
+			name:    "empty executable",
+			archive: zipFile(t, archiveFile{name: "mailcheck.exe", data: nil}),
+		},
+		{
+			name:    "oversized executable",
+			archive: zipFile(t, archiveFile{name: "mailcheck.exe", data: make([]byte, maxExecutableBytes+1)}),
+		},
+		{
+			name:    "only traversal entry",
+			archive: zipFile(t, archiveFile{name: "../mailcheck.exe", data: []byte("malicious")}),
+		},
+		{
+			name:    "unrelated entry",
+			archive: zipFile(t, archiveFile{name: "README.md", data: []byte("not executable")}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ExtractExecutable("mailcheck_1.2.3_windows_amd64.zip", test.archive); err == nil {
+				t.Fatal("ExtractExecutable() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestExtractExecutableAcceptsExecutableAtMaximumSize(t *testing.T) {
+	archive := tarGz(t, archiveFile{name: "mailcheck", data: make([]byte, maxExecutableBytes)})
+
+	got, err := ExtractExecutable("mailcheck_1.2.3_linux_amd64.tar.gz", archive)
+	if err != nil {
+		t.Fatalf("ExtractExecutable() error = %v", err)
+	}
+	if len(got) != maxExecutableBytes {
+		t.Fatalf("len(ExtractExecutable()) = %d, want %d", len(got), maxExecutableBytes)
 	}
 }
 
@@ -208,6 +270,16 @@ func TestExtractExecutableRejectsOversizedArchive(t *testing.T) {
 	archive := make([]byte, maxArchiveBytes+1)
 	if _, err := ExtractExecutable("mailcheck_1.2.3_linux_amd64.tar.gz", archive); err == nil {
 		t.Fatal("ExtractExecutable() error = nil, want error")
+	}
+}
+
+func requireErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error = nil, want error containing %q", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want substring %q", err, want)
 	}
 }
 
