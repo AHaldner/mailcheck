@@ -46,7 +46,10 @@ mailcheck -h
 mailcheck --help
 mailcheck -v
 mailcheck --version
+mailcheck upgrade
 ```
+
+`mailcheck upgrade` immediately checks GitHub for the newest stable release and installs it when it is newer than your current version. Only stable tagged builds can self-upgrade. Prerelease and experimental releases must be downloaded manually from GitHub.
 
 Build locally:
 
@@ -59,6 +62,12 @@ Run tests:
 ```bash
 go test ./...
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `mailcheck upgrade` | Install the latest stable release immediately. |
 
 ## Flags
 
@@ -93,6 +102,10 @@ go test ./...
 - SOA and DNSSEC diagnostics use `codeberg.org/miekg/dns` for direct DNS queries. DNSSEC reports resolver AD-bit validation; it does not claim full local chain validation.
 - `CAA`, `TLSA`, and zone transfer probes are intentionally not checked by default because they are not core mail deliverability checks or can be noisy/intrusive without explicit advanced mode support.
 - In interactive text mode, a single live progress line is shown on `stderr` while checks are running.
+- After a text run, a released build checks GitHub for updates at most once per day. If a newer stable release is available, mailcheck prints a notice to `stderr` once for that release.
+- `mailcheck upgrade` verifies the downloaded release archive against its `checksums.txt` SHA-256 checksum before replacing the executable.
+- Self-upgrade release builds are available for macOS, Linux, and Windows on `amd64` and `arm64` systems.
+- Upgrading requires write permission for the installed `mailcheck` executable and its containing directory. If either is read-only, install a release manually somewhere you can write.
 - The tool only checks DNS records. It does not test SMTP, TLS, inbox placement, or message signing end-to-end.
 
 ## Example
